@@ -75,6 +75,10 @@ class OptimizationSession(Base):
     # 处理模式: 'paper_polish', 'paper_polish_enhance', 'emotion_polish'
     processing_mode = Column(String(50), default='paper_polish_enhance')
     
+    # 用户满意度评价
+    user_rating = Column(Integer, nullable=True)
+    user_comment = Column(Text, nullable=True)
+    
     # 关系
     user = relationship("User", back_populates="sessions")
     segments = relationship("OptimizationSegment", back_populates="session", cascade="all, delete-orphan")
@@ -99,6 +103,7 @@ class OptimizationSegment(Base):
     enhanced_text = Column(Text, nullable=True)
     status = Column(String(50), index=True)  # 'pending', 'processing', 'completed', 'failed'
     is_title = Column(Boolean, default=False)
+    user_edited_text = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     

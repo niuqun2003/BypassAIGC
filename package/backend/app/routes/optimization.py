@@ -7,7 +7,8 @@ from app.database import get_db
 from app.models.models import User, OptimizationSession, OptimizationSegment, ChangeLog
 from app.schemas import (
     OptimizationCreate, SessionResponse, SessionDetailResponse,
-    QueueStatusResponse, ProgressUpdate, ChangeLogResponse, ExportConfirmation
+    QueueStatusResponse, ProgressUpdate, ChangeLogResponse, ExportConfirmation,
+    SessionFeedback, SegmentEdit
 )
 from app.services.optimization_service import OptimizationService
 from app.services.concurrency import concurrency_manager
@@ -320,6 +321,112 @@ async def get_session_changes(
     return parsed_changes
 
 
+@router.post("/sessions/{session_id}/feedback")
+async def submit_feedback(
+    session_id: str,
+    card_key: str,
+    feedback: SessionFeedback,
+    db: Session = Depends(get_db)
+):
+    """提交会话满意度反馈"""
+    user = get_current_user(card_key, db)
+
+    session = db.query(OptimizationSession).filter(
+        OptimizationSession.session_id == session_id,
+        OptimizationSession.user_id == user.id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    if session.status != "completed":
+        raise HTTPException(status_code=400, detail="只能对已完成的会话评分")
+
+    session.user_rating = feedback.rating
+    session.user_comment = feedback.comment
+    db.commit()
+
+    return {"message": "评分已提交", "rating": feedback.rating}
+
+
+@router.get("/user-stats")
+async def get_user_stats(
+    card_key: str,
+    db: Session = Depends(get_db)
+):
+    """获取用户个人统计"""
+    user = get_current_user(card_key, db)
+
+    total_sessions = db.query(func.count(OptimizationSession.id)).filter(
+        OptimizationSession.user_id == user.id
+    ).scalar() or 0
+
+    completed_sessions = db.query(func.count(OptimizationSession.id)).filter(
+        OptimizationSession.user_id == user.id,
+        OptimizationSession.status == "completed"
+    ).scalar() or 0
+
+    total_segments = db.query(func.count(OptimizationSegment.id)).join(
+        OptimizationSession,
+        OptimizationSegment.session_id == OptimizationSession.id
+    ).filter(
+        OptimizationSession.user_id == user.id,
+        OptimizationSegment.status == "completed"
+    ).scalar() or 0
+
+    total_chars = db.query(func.sum(func.length(OptimizationSession.original_text))).filter(
+        OptimizationSession.user_id == user.id,
+        OptimizationSession.status == "completed"
+    ).scalar() or 0
+
+    avg_rating = db.query(func.avg(OptimizationSession.user_rating)).filter(
+        OptimizationSession.user_id == user.id,
+        OptimizationSession.user_rating.isnot(None)
+    ).scalar()
+
+    return {
+        "total_sessions": total_sessions,
+        "completed_sessions": completed_sessions,
+        "total_segments": total_segments,
+        "total_chars": total_chars,
+        "avg_rating": round(float(avg_rating), 1) if avg_rating is not None else None,
+        "usage_limit": user.usage_limit,
+        "usage_count": user.usage_count,
+    }
+
+
+@router.post("/sessions/{session_id}/edit")
+async def edit_segment(
+    session_id: str,
+    card_key: str,
+    edit_data: SegmentEdit,
+    db: Session = Depends(get_db)
+):
+    """手动编辑段落润色结果"""
+    user = get_current_user(card_key, db)
+
+    session = db.query(OptimizationSession).filter(
+        OptimizationSession.session_id == session_id,
+        OptimizationSession.user_id == user.id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    segment = db.query(OptimizationSegment).filter(
+        OptimizationSegment.session_id == session.id,
+        OptimizationSegment.segment_index == edit_data.segment_index
+    ).first()
+
+    if not segment:
+        raise HTTPException(status_code=404, detail="段落不存在")
+
+    segment.user_edited_text = edit_data.edited_text
+    db.commit()
+
+    return {"message": "段落已更新", "segment_index": edit_data.segment_index}
+
+
 @router.post("/sessions/{session_id}/export")
 async def export_session(
     session_id: str,
@@ -354,7 +461,7 @@ async def export_session(
     
     # 组合最终文本
     final_text = "\n\n".join([
-        seg.enhanced_text or seg.polished_text or seg.original_text
+        seg.user_edited_text or seg.enhanced_text or seg.polished_text or seg.original_text
         for seg in segments
     ])
     

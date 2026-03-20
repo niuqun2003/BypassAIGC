@@ -11,7 +11,7 @@ from typing import Dict, Tuple, Optional
 # 先导入 config 以便加载环境变量
 from app.config import settings
 from app.database import init_db
-from app.routes import admin, prompts, optimization
+from app.routes import admin, export, optimization, prompts, upload
 from app.models.models import CustomPrompt
 from app.database import SessionLocal
 from app.services.ai_service import get_default_polish_prompt, get_default_enhance_prompt
@@ -91,6 +91,8 @@ app.add_middleware(
 app.include_router(admin.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(optimization.router, prefix="/api")
+app.include_router(export.router, prefix="/api")
+app.include_router(upload.router, prefix="/api")
 
 # 速率限制中间件已移除
 

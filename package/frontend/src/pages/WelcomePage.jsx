@@ -69,6 +69,8 @@ const WelcomePage = () => {
       });
       
       if (response.data.valid) {
+        localStorage.setItem('usageLimit', response.data.usage_limit);
+        localStorage.setItem('usageCount', response.data.usage_count);
         setShowWarning(true);
       }
     } catch (error) {

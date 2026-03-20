@@ -124,7 +124,13 @@ async def verify_card_key(data: CardKeyVerify, db: Session = Depends(get_db)) ->
 
     user.last_used = datetime.utcnow()
     db.commit()
-    return {"valid": True, "user_id": user.id, "created_at": user.created_at}
+    return {
+        "valid": True,
+        "user_id": user.id,
+        "created_at": user.created_at,
+        "usage_limit": user.usage_limit,
+        "usage_count": user.usage_count,
+    }
 
 
 @router.post("/card-keys")

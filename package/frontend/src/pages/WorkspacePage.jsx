@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   FileText, History, LogOut, Play,
-  Users, Clock, AlertCircle, CheckCircle, Trash2, Info
+  Users, Clock, AlertCircle, CheckCircle, Trash2, Info, Upload
 } from 'lucide-react';
-import { optimizationAPI } from '../api';
+import { optimizationAPI, uploadAPI } from '../api';
 
 // 会话列表项组件 - 使用 memo 避免不必要重渲染
 const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry }) => {
@@ -114,6 +114,7 @@ const WorkspacePage = () => {
   const [activeSession, setActiveSession] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [userStats, setUserStats] = useState(null);
   const navigate = useNavigate();
 
   // 使用 useCallback 优化函数引用稳定性
@@ -147,6 +148,15 @@ const WorkspacePage = () => {
     }
   }, []);
 
+  const loadUserStats = useCallback(async () => {
+    try {
+      const response = await optimizationAPI.getUserStats();
+      setUserStats(response.data);
+    } catch (error) {
+      console.error('加载用户统计失败:', error);
+    }
+  }, []);
+
   const updateSessionProgress = useCallback(async (sessionId) => {
     try {
       const response = await optimizationAPI.getSessionProgress(sessionId);
@@ -170,6 +180,12 @@ const WorkspacePage = () => {
 
         if (progress.status === 'completed') {
           toast.success('优化完成!');
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('AI 论文润色助手', {
+              body: '您的论文已处理完成',
+              icon: '/favicon.ico',
+            });
+          }
         } else {
           toast.error(`优化失败: ${progress.error_message}`);
         }
@@ -181,9 +197,13 @@ const WorkspacePage = () => {
 
   // 初始加载 - 只在组件挂载时执行一次
   useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
     loadSessions();
     loadQueueStatus();
-  }, [loadSessions, loadQueueStatus]);
+    loadUserStats();
+  }, [loadQueueStatus, loadSessions, loadUserStats]);
 
   // 队列状态轮询 - 独立的 useEffect，避免与初始加载混淆
   useEffect(() => {
@@ -221,6 +241,8 @@ const WorkspacePage = () => {
       setActiveSession(response.data.session_id);
       toast.success('优化任务已启动');
       setText('');
+      const currentCount = parseInt(localStorage.getItem('usageCount') || '0', 10);
+      localStorage.setItem('usageCount', (currentCount + 1).toString());
       loadSessions();
     } catch (error) {
       toast.error('启动优化失败: ' + error.response?.data?.detail);
@@ -300,6 +322,19 @@ const WorkspacePage = () => {
             </div>
             
             <div className="flex items-center gap-4">
+              {(() => {
+                const usageLimit = parseInt(localStorage.getItem('usageLimit') || '0', 10);
+                const usageCount = parseInt(localStorage.getItem('usageCount') || '0', 10);
+                const remaining = usageLimit === 0 ? '无限制' : `${Math.max(usageLimit - usageCount, 0)} 次`;
+                return (
+                  <div className="flex items-center gap-1.5 bg-green-50 px-2 py-1 rounded-md">
+                    <span className="text-[13px] text-green-700 font-medium">
+                      剩余次数：{remaining}
+                    </span>
+                  </div>
+                );
+              })()}
+
               {/* 队列状态 */}
               {queueStatus && (
                 <div className="flex items-center gap-3 text-[13px]">
@@ -332,6 +367,33 @@ const WorkspacePage = () => {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {userStats && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            <div className="bg-white rounded-xl shadow-ios p-3 text-center">
+              <div className="text-[20px] font-bold text-ios-blue">{userStats.completed_sessions}</div>
+              <div className="text-[12px] text-ios-gray">已完成会话</div>
+            </div>
+            <div className="bg-white rounded-xl shadow-ios p-3 text-center">
+              <div className="text-[20px] font-bold text-ios-blue">{userStats.total_segments}</div>
+              <div className="text-[12px] text-ios-gray">处理段落数</div>
+            </div>
+            <div className="bg-white rounded-xl shadow-ios p-3 text-center">
+              <div className="text-[20px] font-bold text-ios-blue">
+                {userStats.total_chars > 10000
+                  ? `${(userStats.total_chars / 10000).toFixed(1)}万`
+                  : userStats.total_chars}
+              </div>
+              <div className="text-[12px] text-ios-gray">处理字符数</div>
+            </div>
+            <div className="bg-white rounded-xl shadow-ios p-3 text-center">
+              <div className="text-[20px] font-bold text-ios-blue">
+                {userStats.avg_rating ? `${userStats.avg_rating}★` : '-'}
+              </div>
+              <div className="text-[12px] text-ios-gray">平均评分</div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* 左侧 - 输入区域 */}
           <div className="lg:col-span-2 space-y-6">
@@ -399,6 +461,30 @@ const WorkspacePage = () => {
               </div>
               
               <div className="relative">
+                <div className="mb-3">
+                  <label className="flex items-center gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg cursor-pointer transition-colors border border-dashed border-gray-300 text-[13px] text-ios-gray">
+                    <Upload className="w-4 h-4" />
+                    <span>上传文件（.docx / .pdf）</span>
+                    <input
+                      type="file"
+                      accept=".docx,.pdf"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          toast.loading('正在解析文件...', { id: 'upload' });
+                          const response = await uploadAPI.extractText(file);
+                          setText(response.data.text);
+                          toast.success(`已提取 ${response.data.char_count} 个字符`, { id: 'upload' });
+                        } catch (error) {
+                          toast.error(`文件解析失败: ${error.response?.data?.detail || '未知错误'}`, { id: 'upload' });
+                        }
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
                 <textarea
                   value={text}
                   onChange={(e) => setText(e.target.value)}
