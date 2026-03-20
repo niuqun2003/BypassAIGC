@@ -11,6 +11,7 @@ from app.config import reload_settings, settings
 from app.database import get_db
 from app.models.models import (
     ChangeLog,
+    CustomPrompt,
     OptimizationSegment,
     OptimizationSession,
     SessionHistory,
@@ -876,3 +877,106 @@ async def delete_table_record(
     db.delete(record)
     db.commit()
     return {"message": "记录已删除"}
+
+
+# ── 提示词管理接口 ──────────────────────────────────────────
+
+class PromptCreate(BaseModel):
+    name: str
+    stage: str
+    content: str
+    is_default: bool = False
+
+class PromptUpdate(BaseModel):
+    name: Optional[str] = None
+    content: Optional[str] = None
+    is_default: Optional[bool] = None
+
+@router.get("/prompts")
+async def admin_list_prompts(
+    admin: str = Depends(get_admin_from_token),
+    db: Session = Depends(get_db)
+):
+    """获取所有提示词（管理员）"""
+    prompts = db.query(CustomPrompt).order_by(CustomPrompt.id).all()
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "stage": p.stage,
+            "content": p.content,
+            "is_default": p.is_default,
+            "is_system": p.is_system,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        for p in prompts
+    ]
+
+@router.post("/prompts")
+async def admin_create_prompt(
+    data: PromptCreate,
+    admin: str = Depends(get_admin_from_token),
+    db: Session = Depends(get_db)
+):
+    """新建提示词（管理员）"""
+    if data.is_default:
+        db.query(CustomPrompt).filter(
+            CustomPrompt.stage == data.stage,
+            CustomPrompt.is_default == True
+        ).update({"is_default": False})
+    prompt = CustomPrompt(
+        name=data.name,
+        stage=data.stage,
+        content=data.content,
+        is_default=data.is_default,
+        is_system=False,
+    )
+    db.add(prompt)
+    db.commit()
+    db.refresh(prompt)
+    return {"id": prompt.id, "name": prompt.name, "stage": prompt.stage,
+            "content": prompt.content, "is_default": prompt.is_default, "is_system": prompt.is_system}
+
+@router.put("/prompts/{prompt_id}")
+async def admin_update_prompt(
+    prompt_id: int,
+    data: PromptUpdate,
+    admin: str = Depends(get_admin_from_token),
+    db: Session = Depends(get_db)
+):
+    """更新提示词（管理员）"""
+    prompt = db.query(CustomPrompt).filter(CustomPrompt.id == prompt_id).first()
+    if not prompt:
+        raise HTTPException(status_code=404, detail="提示词不存在")
+    if data.name is not None:
+        prompt.name = data.name
+    if data.content is not None:
+        prompt.content = data.content
+    if data.is_default is not None:
+        if data.is_default:
+            db.query(CustomPrompt).filter(
+                CustomPrompt.stage == prompt.stage,
+                CustomPrompt.is_default == True,
+                CustomPrompt.id != prompt_id
+            ).update({"is_default": False})
+        prompt.is_default = data.is_default
+    db.commit()
+    db.refresh(prompt)
+    return {"id": prompt.id, "name": prompt.name, "stage": prompt.stage,
+            "content": prompt.content, "is_default": prompt.is_default, "is_system": prompt.is_system}
+
+@router.delete("/prompts/{prompt_id}")
+async def admin_delete_prompt(
+    prompt_id: int,
+    admin: str = Depends(get_admin_from_token),
+    db: Session = Depends(get_db)
+):
+    """删除提示词（管理员）"""
+    prompt = db.query(CustomPrompt).filter(CustomPrompt.id == prompt_id).first()
+    if not prompt:
+        raise HTTPException(status_code=404, detail="提示词不存在")
+    if prompt.is_system:
+        raise HTTPException(status_code=400, detail="系统内置提示词不可删除")
+    db.delete(prompt)
+    db.commit()
+    return {"message": "已删除"}

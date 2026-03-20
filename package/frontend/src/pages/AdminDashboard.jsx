@@ -28,6 +28,7 @@ import {
 import ConfigManager from '../components/ConfigManager';
 import SessionMonitor from '../components/SessionMonitor';
 import DatabaseManager from '../components/DatabaseManager';
+import PromptManager from '../components/PromptManager';
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
@@ -468,6 +469,23 @@ const AdminDashboard = () => {
                 <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-12 h-1 bg-white rounded-full"></div>
               )}
             </button>
+
+            <button
+              onClick={() => setActiveTab('prompts')}
+              className={`group relative flex items-center gap-2.5 px-6 py-3 rounded-xl font-semibold transition-all duration-300 ease-out ${
+                activeTab === 'prompts'
+                  ? 'bg-gradient-to-r from-rose-600 to-rose-500 text-white shadow-lg shadow-rose-500/30 scale-105'
+                  : 'bg-white text-gray-600 hover:text-rose-600 hover:bg-rose-50 hover:shadow-md border border-gray-200'
+              }`}
+            >
+              <FileText className={`w-5 h-5 transition-transform duration-300 ${
+                activeTab === 'prompts' ? 'scale-110' : 'group-hover:scale-110'
+              }`} />
+              <span className="whitespace-nowrap">提示词管理</span>
+              {activeTab === 'prompts' && (
+                <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-12 h-1 bg-white rounded-full"></div>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -876,6 +894,11 @@ const AdminDashboard = () => {
         {/* Config Manager Tab */}
         {activeTab === 'config' && (
           <ConfigManager adminToken={adminToken} />
+        )}
+
+        {/* Prompt Manager Tab */}
+        {activeTab === 'prompts' && (
+          <PromptManager adminToken={adminToken} />
         )}
       </div>
 
