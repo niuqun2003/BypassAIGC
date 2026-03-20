@@ -39,6 +39,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+.worktrees/
 *.tmp
 
 # Process ID files
