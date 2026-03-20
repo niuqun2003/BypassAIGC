@@ -3,9 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Download, FileText, GitCompare,
-  CheckCircle, AlertCircle, Shield, Square
+  CheckCircle, AlertCircle, Shield, Square, Eye
 } from 'lucide-react';
 import { optimizationAPI } from '../api';
+import DiffView from '../components/DiffView';
+import FeedbackWidget from '../components/FeedbackWidget';
 
 const SessionDetailPage = () => {
   const { sessionId } = useParams();
@@ -16,11 +18,18 @@ const SessionDetailPage = () => {
   const [activeTab, setActiveTab] = useState('result');
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState('txt');
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   useEffect(() => {
     let eventSource = null;
     
     const initializeSession = async () => {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+
       // 先加载数据
       await loadSessionDetail();
       await loadChanges();
@@ -56,6 +65,37 @@ const SessionDetailPage = () => {
       }
     };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!session || session.status === 'completed' || session.status === 'failed') return;
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await optimizationAPI.getSessionProgress(sessionId);
+        const progress = response.data;
+        if (progress.status === 'completed') {
+          setSession(prev => (prev ? { ...prev, status: 'completed' } : prev));
+          await loadSessionDetail();
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('AI 论文润色助手', {
+              body: '您的论文已处理完成',
+              icon: '/favicon.ico',
+            });
+          }
+          clearInterval(interval);
+        } else if (progress.status === 'failed') {
+          setSession(prev => (
+            prev ? { ...prev, status: 'failed', error_message: progress.error_message } : prev
+          ));
+          clearInterval(interval);
+        }
+      } catch (error) {
+        console.error('检查会话状态失败:', error);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [session?.status, sessionId]);
 
   const handleStreamUpdate = (data) => {
     setSegments(prevSegments => {
@@ -124,6 +164,14 @@ const SessionDetailPage = () => {
     }
 
     try {
+      if (exportFormat === 'docx') {
+        const url = optimizationAPI.exportDocx(sessionId);
+        window.open(url, '_blank');
+        toast.success('Word 文档开始下载');
+        setShowExportModal(false);
+        return;
+      }
+
       const response = await optimizationAPI.exportSession(sessionId, {
         session_id: sessionId,
         acknowledge_academic_integrity: true,
@@ -146,6 +194,28 @@ const SessionDetailPage = () => {
     }
   };
 
+  const handleSaveEdit = async (segmentIndex) => {
+    try {
+      setIsSavingEdit(true);
+      await optimizationAPI.editSegment(sessionId, {
+        segment_index: segmentIndex,
+        edited_text: editText,
+      });
+      setSegments(prev => prev.map(seg => (
+        seg.segment_index === segmentIndex
+          ? { ...seg, user_edited_text: editText }
+          : seg
+      )));
+      setEditingIndex(null);
+      setEditText('');
+      toast.success('段落已保存');
+    } catch (error) {
+      toast.error('保存失败: ' + (error.response?.data?.detail || '未知错误'));
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const handleStop = async () => {
     if (!window.confirm('确定要停止当前的优化任务吗？已完成的段落将保留。')) {
       return;
@@ -161,14 +231,14 @@ const SessionDetailPage = () => {
   };
 
   const getFinalText = () => {
-    return segments
+    return [...segments]
       .sort((a, b) => a.segment_index - b.segment_index)
-      .map(seg => seg.enhanced_text || seg.polished_text || seg.original_text)
+      .map(seg => seg.user_edited_text || seg.enhanced_text || seg.polished_text || seg.original_text)
       .join('\n\n');
   };
 
   const getOriginalText = () => {
-    return segments
+    return [...segments]
       .sort((a, b) => a.segment_index - b.segment_index)
       .map(seg => seg.original_text)
       .join('\n\n');
@@ -290,48 +360,130 @@ const SessionDetailPage = () => {
                 变更对照
               </div>
             </button>
+            <button
+              onClick={() => setActiveTab('diff')}
+              className={`flex-1 py-1.5 px-4 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
+                activeTab === 'diff'
+                  ? 'bg-white text-black shadow-sm'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <Eye className="w-4 h-4" />
+                Diff 对比
+              </div>
+            </button>
           </div>
         </div>
 
         {/* 内容区域 */}
         <div className="space-y-6">
           {activeTab === 'result' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-white rounded-2xl shadow-ios overflow-hidden flex flex-col h-[calc(100vh-180px)]">
-                <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
-                  <h3 className="text-[15px] font-semibold text-black ml-2">
-                    优化后的文本
-                  </h3>
-                  <button
-                    className="text-ios-blue text-[13px] px-3 py-1 hover:bg-blue-50 rounded-md transition-colors"
-                    onClick={() => {
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white rounded-2xl shadow-ios overflow-hidden flex flex-col h-[calc(100vh-180px)]">
+                  <div className="p-3 bg-gray-50 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="text-[15px] font-semibold text-black ml-2">
+                      优化后的文本
+                    </h3>
+                    <button
+                      className="text-ios-blue text-[13px] px-3 py-1 hover:bg-blue-50 rounded-md transition-colors"
+                      onClick={() => {
                         navigator.clipboard.writeText(getFinalText());
                         toast.success('已复制到剪贴板');
-                    }}
-                  >
-                    复制全文
-                  </button>
+                      }}
+                    >
+                      复制全文
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-5 bg-white custom-scrollbar">
+                    {[...segments]
+                      .sort((a, b) => a.segment_index - b.segment_index)
+                      .map((seg) => {
+                        const displayText =
+                          seg.user_edited_text || seg.enhanced_text || seg.polished_text || seg.original_text;
+                        const isEditing = editingIndex === seg.segment_index;
+                        return (
+                          <div key={seg.id} className="mb-4 group relative">
+                            {isEditing ? (
+                              <div className="space-y-2">
+                                <textarea
+                                  value={editText}
+                                  onChange={(e) => setEditText(e.target.value)}
+                                  className="w-full min-h-[100px] px-3 py-2 bg-gray-50 rounded-lg text-[16px] leading-relaxed border border-ios-blue/30 outline-none focus:ring-2 focus:ring-ios-blue/20 resize-y"
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleSaveEdit(seg.segment_index)}
+                                    disabled={isSavingEdit}
+                                    className="px-3 py-1 bg-ios-blue text-white text-[13px] rounded-md hover:bg-blue-600 disabled:bg-gray-300"
+                                  >
+                                    {isSavingEdit ? '保存中...' : '保存'}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setEditingIndex(null);
+                                      setEditText('');
+                                    }}
+                                    className="px-3 py-1 bg-gray-100 text-gray-700 text-[13px] rounded-md hover:bg-gray-200"
+                                  >
+                                    取消
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <pre className="whitespace-pre-wrap font-sans text-[16px] text-black leading-relaxed">
+                                  {displayText}
+                                </pre>
+                                {session.status === 'completed' && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingIndex(seg.segment_index);
+                                      setEditText(displayText);
+                                    }}
+                                    className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 px-2 py-1 bg-gray-100 text-gray-600 text-[12px] rounded-md hover:bg-gray-200 transition-opacity"
+                                  >
+                                    编辑
+                                  </button>
+                                )}
+                              </>
+                            )}
+                            {seg.user_edited_text && !isEditing && (
+                              <span className="text-[11px] text-ios-orange bg-orange-50 px-1.5 py-0.5 rounded mt-1 inline-block">
+                                已手动编辑
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-5 bg-white custom-scrollbar">
-                  <pre className="whitespace-pre-wrap font-sans text-[16px] text-black leading-relaxed">
-                    {getFinalText()}
-                  </pre>
+                
+                <div className="bg-white rounded-2xl shadow-ios overflow-hidden flex flex-col h-[calc(100vh-180px)]">
+                  <div className="p-3 bg-gray-50 border-b border-gray-100">
+                    <h3 className="text-[15px] font-semibold text-gray-500 ml-2">
+                      原始文本
+                    </h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-5 bg-gray-50/50 custom-scrollbar">
+                    <pre className="whitespace-pre-wrap font-sans text-[15px] text-gray-500 leading-relaxed">
+                      {getOriginalText()}
+                    </pre>
+                  </div>
                 </div>
               </div>
-              
-              <div className="bg-white rounded-2xl shadow-ios overflow-hidden flex flex-col h-[calc(100vh-180px)]">
-                <div className="p-3 bg-gray-50 border-b border-gray-100">
-                  <h3 className="text-[15px] font-semibold text-gray-500 ml-2">
-                    原始文本
-                  </h3>
+
+              {session.status === 'completed' && (
+                <div className="mt-6">
+                  <FeedbackWidget
+                    sessionId={sessionId}
+                    initialRating={session.user_rating}
+                    initialComment={session.user_comment}
+                  />
                 </div>
-                <div className="flex-1 overflow-y-auto p-5 bg-gray-50/50 custom-scrollbar">
-                  <pre className="whitespace-pre-wrap font-sans text-[15px] text-gray-500 leading-relaxed">
-                    {getOriginalText()}
-                  </pre>
-                </div>
-              </div>
-            </div>
+              )}
+            </>
           )}
 
           {activeTab === 'compare' && (
@@ -389,6 +541,46 @@ const SessionDetailPage = () => {
               )}
             </div>
           )}
+
+          {activeTab === 'diff' && (
+            <div className="bg-white rounded-2xl shadow-ios p-6 min-h-[calc(100vh-180px)]">
+              <h3 className="text-[20px] font-bold text-black mb-6 tracking-tight">
+                Diff 逐段对比
+              </h3>
+              {segments.length === 0 ? (
+                <div className="text-center py-12">
+                  <p className="text-ios-gray">暂无段落数据</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {[...segments]
+                    .sort((a, b) => a.segment_index - b.segment_index)
+                    .map((seg) => {
+                      const finalText = seg.enhanced_text || seg.polished_text;
+                      if (!finalText) return null;
+                      return (
+                        <div key={seg.id} className="border border-gray-100 rounded-xl p-5 hover:shadow-md transition-shadow">
+                          <div className="flex items-center gap-2 mb-4">
+                            <span className="bg-blue-50 text-ios-blue text-[11px] font-bold px-2 py-1 rounded-md uppercase tracking-wide">
+                              段落 {seg.segment_index + 1}
+                            </span>
+                            {seg.is_title && (
+                              <span className="bg-gray-100 text-gray-600 text-[11px] font-bold px-2 py-1 rounded-md">
+                                标题
+                              </span>
+                            )}
+                          </div>
+                          <DiffView
+                            originalText={seg.original_text}
+                            modifiedText={finalText}
+                          />
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -431,7 +623,7 @@ const SessionDetailPage = () => {
                   className="w-full px-3 py-2 bg-gray-100 rounded-lg text-[15px] border-none focus:ring-0"
                 >
                   <option value="txt">文本文件 (.txt)</option>
-                  <option value="docx" disabled>Word文档 (.docx) - 即将支持</option>
+                  <option value="docx">Word文档 (.docx)</option>
                   <option value="pdf" disabled>PDF文件 (.pdf) - 即将支持</option>
                 </select>
               </div>

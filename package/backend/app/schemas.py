@@ -51,6 +51,7 @@ class SegmentResponse(BaseModel):
     enhanced_text: Optional[str] = None
     status: str
     is_title: bool
+    user_edited_text: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
     
@@ -72,6 +73,8 @@ class SessionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime] = None
+    user_rating: Optional[int] = None
+    user_comment: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -178,3 +181,15 @@ class PromptResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class SessionFeedback(BaseModel):
+    """会话满意度反馈"""
+    rating: int = Field(..., ge=1, le=5, description="1-5 星评分")
+    comment: Optional[str] = Field(None, max_length=1000, description="用户评价文本")
+
+
+class SegmentEdit(BaseModel):
+    """段落编辑请求"""
+    segment_index: int = Field(..., ge=0)
+    edited_text: str = Field(..., min_length=1)

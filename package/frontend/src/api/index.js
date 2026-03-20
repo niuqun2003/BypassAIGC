@@ -106,6 +106,14 @@ export const optimizationAPI = {
     api.get(`/optimization/sessions/${sessionId}/changes`, {
       timeout: 20000, // 20秒超时
     }),
+  submitFeedback: (sessionId, data) =>
+    api.post(`/optimization/sessions/${sessionId}/feedback`, data, {
+      timeout: 10000,
+    }),
+  getUserStats: () =>
+    api.get('/optimization/user-stats', {
+      timeout: 10000,
+    }),
   stopSession: (sessionId) =>
     api.post(`/optimization/sessions/${sessionId}/stop`, null, {
       timeout: 10000, // 10秒超时
@@ -122,10 +130,31 @@ export const optimizationAPI = {
     api.post(`/optimization/sessions/${sessionId}/retry`, null, {
       timeout: 15000, // 15秒超时
     }),
+  editSegment: (sessionId, data) =>
+    api.post(`/optimization/sessions/${sessionId}/edit`, data, {
+      timeout: 10000,
+    }),
   getStreamUrl: (sessionId) => {
     const cardKey = localStorage.getItem('cardKey');
     const baseUrl = api.defaults.baseURL || '/api';
     return `${baseUrl}/optimization/sessions/${sessionId}/stream?card_key=${cardKey}`;
+  },
+  exportDocx: (sessionId) => {
+    const cardKey = localStorage.getItem('cardKey');
+    const baseUrl = api.defaults.baseURL || '/api';
+    return `${baseUrl}/export/sessions/${sessionId}/docx?card_key=${cardKey}`;
+  },
+};
+
+// Upload API
+export const uploadAPI = {
+  extractText: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/upload/extract-text', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
   },
 };
 

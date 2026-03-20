@@ -150,6 +150,14 @@ def _migrate_database_schema():
                         _add_column_safely(conn, "optimization_sessions", "emotion_base_url", "VARCHAR(255)")
                         if added:
                             print("  ✓ 添加字段: optimization_sessions.emotion_* 字段")
+
+                    if "user_rating" not in columns:
+                        if _add_column_safely(conn, "optimization_sessions", "user_rating", "INTEGER"):
+                            print("  ✓ 添加字段: optimization_sessions.user_rating")
+
+                    if "user_comment" not in columns:
+                        if _add_column_safely(conn, "optimization_sessions", "user_comment", "TEXT"):
+                            print("  ✓ 添加字段: optimization_sessions.user_comment")
             
                 # 迁移 users 表
                 if "users" in tables:
@@ -178,6 +186,10 @@ def _migrate_database_schema():
                     if "is_title" not in segment_columns:
                         if _add_column_safely(conn, "optimization_segments", "is_title", "BOOLEAN DEFAULT 0"):
                             print("  ✓ 添加字段: optimization_segments.is_title")
+
+                    if "user_edited_text" not in segment_columns:
+                        if _add_column_safely(conn, "optimization_segments", "user_edited_text", "TEXT"):
+                            print("  ✓ 添加字段: optimization_segments.user_edited_text")
             
                 # 迁移 custom_prompts 表
                 if "custom_prompts" in tables:
