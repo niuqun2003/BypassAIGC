@@ -39,6 +39,57 @@ def remove_thinking_tags(text: str) -> str:
     return text.strip()
 
 
+def extract_response_text(response) -> str:
+    """兼容提取不同 OpenAI 兼容网关返回的文本内容。"""
+    if response is None:
+        return ""
+
+    if isinstance(response, str):
+        return response
+
+    choices = getattr(response, "choices", None)
+    if choices:
+        first_choice = choices[0]
+        message = getattr(first_choice, "message", None)
+        if message is not None:
+            content = getattr(message, "content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    else:
+                        text_value = getattr(item, "text", None)
+                        if text_value:
+                            parts.append(text_value)
+                return "".join(parts)
+
+        text_value = getattr(first_choice, "text", None)
+        if isinstance(text_value, str):
+            return text_value
+
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str):
+        return output_text
+
+    if isinstance(response, dict):
+        if isinstance(response.get("output_text"), str):
+            return response["output_text"]
+        choices = response.get("choices")
+        if choices:
+            first_choice = choices[0]
+            if isinstance(first_choice, dict):
+                message = first_choice.get("message", {})
+                if isinstance(message, dict) and isinstance(message.get("content"), str):
+                    return message["content"]
+                if isinstance(first_choice.get("text"), str):
+                    return first_choice["text"]
+
+    raise TypeError(f"无法从 AI 响应中提取文本，响应类型: {type(response).__name__}")
+
+
 class AIService:
     """AI 服务类"""
     
@@ -206,7 +257,7 @@ class AIService:
             )
 
             # 获取原始响应内容
-            raw_content = response.choices[0].message.content or ""
+            raw_content = extract_response_text(response)
             
             # 移除思考标签
             filtered_content = remove_thinking_tags(raw_content)
@@ -250,9 +301,9 @@ class AIService:
         stream: bool = False
     ):
         is_chinese = count_chinese_characters(text) > len(text) * 0.1
-        if  is_chinese:
+        if not is_chinese:
             if self._enable_logging:
-                print(f"[ENHANCE] Detected non-Chinese input. Skipping AI processing.", flush=True)
+                print("[POLISH] Detected non-Chinese input. Skipping AI processing.", flush=True)
             if stream:
                 # 如果前端请求流式，我们需要手动造一个异步生成器，把原文"吐"出去
                 async def _pseudo_stream():

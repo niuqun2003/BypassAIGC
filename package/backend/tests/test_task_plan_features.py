@@ -3,6 +3,8 @@ import importlib
 import sys
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
@@ -277,3 +279,35 @@ async def _collect_streaming_response(response):
         else:
             chunks.append(chunk)
     return b"".join(chunks)
+
+
+def test_ai_service_complete_accepts_plain_string_response():
+    ai_service_module = importlib.import_module("app.services.ai_service")
+    service = ai_service_module.AIService.__new__(ai_service_module.AIService)
+    service._enable_logging = False
+    service.model = "test-model"
+    service.base_url = "https://example.com/v1"
+    service.client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value="<think>hidden</think>实际内容")
+            )
+        )
+    )
+
+    result = asyncio.run(service.complete([{"role": "user", "content": "你好"}]))
+
+    assert result == "实际内容"
+
+
+def test_polish_text_calls_ai_for_chinese_input():
+    ai_service_module = importlib.import_module("app.services.ai_service")
+    service = ai_service_module.AIService.__new__(ai_service_module.AIService)
+    service._enable_logging = False
+    service.complete = AsyncMock(return_value="润色后文本")
+    service.stream_complete = AsyncMock()
+
+    result = asyncio.run(service.polish_text("这是一段中文。", "提示词", history=[], stream=False))
+
+    assert result == "润色后文本"
+    service.complete.assert_awaited_once()

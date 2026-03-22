@@ -64,3 +64,19 @@ Mirror the private global-memory repository to both GitHub and Gitee.
 
 ### Superseded Options
 - Storing tokens inside memory files or setup scripts: rejected for security reasons.
+
+### Decision
+Use a GitHub fork plus Pull Request workflow when the upstream repository does not grant direct push access to the current account.
+
+### Why
+- The current GitHub account `niuqun2003` can authenticate successfully but cannot push directly to `sut-qi/BypassAIGC`.
+- A fork-based workflow still allows branch publication, review, and PR creation without requiring upstream write access.
+- It keeps the local merge and verification workflow intact while preserving a standard GitHub review path.
+
+### Implications
+- GitHub feature branches may need to be pushed to `niuqun2003/BypassAIGC` instead of the upstream repo.
+- PR creation should target `sut-qi/BypassAIGC:main` from the fork branch.
+- Direct upstream push attempts should be treated as permission-sensitive and verified before relying on them.
+
+### Superseded Options
+- Assuming direct push access to the upstream GitHub repository: rejected because the server returned `403` for `niuqun2003`.
