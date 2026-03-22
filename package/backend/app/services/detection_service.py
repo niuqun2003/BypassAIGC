@@ -547,7 +547,7 @@ async def detect_text(
             continue
         frag_expl = sec.get("explanation", {})
         fragments.append({
-            "text": (sec.get("content") or sec.get("title") or "")[:500],
+            "text": sec.get("content") or sec.get("title") or "",
             "score": sec["score"],
             "tier": sec["tier"],
             "section_id": idx,

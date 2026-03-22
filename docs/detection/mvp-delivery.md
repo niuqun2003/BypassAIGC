@@ -191,7 +191,7 @@ Content-Type: application/json
 }
 ```
 
-> **MVP 说明：** `fragments[].text` 为片段原文（最多 500 字）。Inline 高亮所需的 `start/end` 字符偏移量为 v2 功能，本版本不实现。
+> **MVP 说明：** `fragments[].text` 为片段完整原文。Inline 高亮所需的 `start/end` 字符偏移量为 v2 功能，本版本不实现。
 
 ---
 
