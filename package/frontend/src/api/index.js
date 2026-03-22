@@ -146,6 +146,14 @@ export const optimizationAPI = {
   },
 };
 
+// Detection API
+export const detectionAPI = {
+  analyze: (text, useLlm = true) =>
+    api.post('/detection/analyze', { text, use_llm: useLlm }, {
+      timeout: 60000,
+    }),
+};
+
 // Upload API
 export const uploadAPI = {
   extractText: (file) => {

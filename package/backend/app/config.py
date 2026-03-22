@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     EMOTION_MODEL: Optional[str] = None
     EMOTION_API_KEY: Optional[str] = None
     EMOTION_BASE_URL: Optional[str] = None
+
+    # AIGC 检测模型配置（不填则复用 POLISH_* 配置）
+    DETECT_MODEL: Optional[str] = None
+    DETECT_API_KEY: Optional[str] = None
+    DETECT_BASE_URL: Optional[str] = None
     
     # 流式输出配置
     USE_STREAMING: bool = False  # 默认使用非流式模式，避免被API阻止

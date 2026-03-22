@@ -8,6 +8,7 @@ import {
 import { optimizationAPI } from '../api';
 import DiffView from '../components/DiffView';
 import FeedbackWidget from '../components/FeedbackWidget';
+import DetectionReport from '../components/DetectionReport';
 
 const SessionDetailPage = () => {
   const { sessionId } = useParams();
@@ -333,10 +334,10 @@ const SessionDetailPage = () => {
         
         {/* iOS Segmented Control */}
         <div className="flex justify-center mb-6">
-          <div className="bg-gray-200/80 p-1 rounded-xl inline-flex w-full max-w-md">
+          <div className="bg-gray-200/80 p-1 rounded-xl inline-flex w-full max-w-2xl">
             <button
               onClick={() => setActiveTab('result')}
-              className={`flex-1 py-1.5 px-4 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
+              className={`flex-1 py-1.5 px-3 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
                 activeTab === 'result'
                   ? 'bg-white text-black shadow-sm'
                   : 'text-gray-600 hover:text-black'
@@ -349,7 +350,7 @@ const SessionDetailPage = () => {
             </button>
             <button
               onClick={() => setActiveTab('compare')}
-              className={`flex-1 py-1.5 px-4 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
+              className={`flex-1 py-1.5 px-3 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
                 activeTab === 'compare'
                   ? 'bg-white text-black shadow-sm'
                   : 'text-gray-600 hover:text-black'
@@ -362,7 +363,7 @@ const SessionDetailPage = () => {
             </button>
             <button
               onClick={() => setActiveTab('diff')}
-              className={`flex-1 py-1.5 px-4 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
+              className={`flex-1 py-1.5 px-3 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
                 activeTab === 'diff'
                   ? 'bg-white text-black shadow-sm'
                   : 'text-gray-600 hover:text-black'
@@ -371,6 +372,19 @@ const SessionDetailPage = () => {
               <div className="flex items-center justify-center gap-2">
                 <Eye className="w-4 h-4" />
                 Diff 对比
+              </div>
+            </button>
+            <button
+              onClick={() => setActiveTab('detection')}
+              className={`flex-1 py-1.5 px-3 rounded-[9px] text-[13px] font-medium transition-all duration-200 ${
+                activeTab === 'detection'
+                  ? 'bg-white text-black shadow-sm'
+                  : 'text-gray-600 hover:text-black'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <Shield className="w-4 h-4" />
+                AIGC 检测
               </div>
             </button>
           </div>
@@ -580,6 +594,11 @@ const SessionDetailPage = () => {
                 </div>
               )}
             </div>
+          )}
+
+          {/* AIGC 检测 Tab */}
+          {activeTab === 'detection' && (
+            <DetectionReport text={getFinalText()} />
           )}
         </div>
       </div>

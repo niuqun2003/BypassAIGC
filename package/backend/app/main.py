@@ -12,6 +12,7 @@ from typing import Dict, Tuple, Optional
 from app.config import settings
 from app.database import init_db
 from app.routes import admin, export, optimization, prompts, upload
+from app.routes import detection
 from app.models.models import CustomPrompt
 from app.database import SessionLocal
 from app.services.ai_service import get_default_polish_prompt, get_default_enhance_prompt
@@ -93,6 +94,7 @@ app.include_router(prompts.router, prefix="/api")
 app.include_router(optimization.router, prefix="/api")
 app.include_router(export.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
+app.include_router(detection.router, prefix="/api")
 
 # 速率限制中间件已移除
 
