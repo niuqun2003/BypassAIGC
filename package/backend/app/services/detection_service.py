@@ -56,6 +56,139 @@ def simple_tokenize(text: str) -> List[str]:
 
 
 # ─────────────────────────────────────────────────────────
+# Task 2: 章节解析（标题感知 + 伪章节回退）
+# ─────────────────────────────────────────────────────────
+
+# 标题检测正则（按行首匹配）
+_HEADING_RE = re.compile(
+    r'^('
+    r'[一二三四五六七八九十百]+[、。]'       # 中文序号：一、二、
+    r'|（[一二三四五六七八九十百]+）'         # 中文括号：（一）（二）
+    r'|\d+(\.\d+)*\s*[、．.。\s]'            # 数字：1. 1.1 2.
+    r'|(Chapter|Section|Part|Abstract|Introduction|Conclusion|References|Discussion|Methods?|Results?)\s*\d*'  # 英文
+    r')',
+    re.IGNORECASE,
+)
+
+
+def split_document_sections(text: str) -> List[Dict]:
+    """
+    Task 2: 语言感知的章节拆分。
+    优先识别显式标题；无标题时按段落分组作为伪章节。
+
+    返回列表，每项：
+      {title: str, content: str, char_count: int}
+    """
+    lines = text.splitlines()
+
+    # 找到所有标题行的索引
+    heading_indices = [i for i, line in enumerate(lines) if _HEADING_RE.match(line.strip())]
+
+    if heading_indices:
+        sections = []
+        for pos, h_idx in enumerate(heading_indices):
+            title = lines[h_idx].strip()
+            end = heading_indices[pos + 1] if pos + 1 < len(heading_indices) else len(lines)
+            content = "\n".join(lines[h_idx + 1:end]).strip()
+            if content or title:
+                sections.append({
+                    "title": title,
+                    "content": content,
+                    "char_count": len(title) + len(content),
+                })
+        # 若标题前有内容，作为前置段落
+        if heading_indices[0] > 0:
+            preamble = "\n".join(lines[:heading_indices[0]]).strip()
+            if preamble:
+                sections.insert(0, {
+                    "title": "前言",
+                    "content": preamble,
+                    "char_count": len(preamble),
+                })
+        return sections
+
+    # 回退：按空行分割段落，合并成伪章节
+    raw_paras = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+    # 每 3 段合为一个伪章节（防止太碎）
+    group_size = 3
+    sections = []
+    for i in range(0, max(len(raw_paras), 1), group_size):
+        group = raw_paras[i:i + group_size]
+        content = "\n\n".join(group)
+        sections.append({
+            "title": f"段落 {i // group_size + 1}",
+            "content": content,
+            "char_count": len(content),
+        })
+    if not sections:
+        sections.append({"title": "全文", "content": text, "char_count": len(text)})
+    return sections
+
+
+# ─────────────────────────────────────────────────────────
+# Task 3: 风险打分 — 公开、可配置阈值
+# ─────────────────────────────────────────────────────────
+
+# 默认阈值（与 spec 保持一致，集中在此处以便校准）
+DEFAULT_HIGH_THRESHOLD = 65
+DEFAULT_MEDIUM_THRESHOLD = 40
+
+
+def score_to_tier(score: int, high: int = DEFAULT_HIGH_THRESHOLD, medium: int = DEFAULT_MEDIUM_THRESHOLD) -> str:
+    """
+    Task 3: 将 0-100 分数映射到风险等级。
+    阈值可通过参数覆盖，便于后期校准。
+    """
+    if score >= high:
+        return "significant"
+    if score >= medium:
+        return "suspected"
+    return "unmarked"
+
+
+# ─────────────────────────────────────────────────────────
+# Task 4: 可审计解释
+# ─────────────────────────────────────────────────────────
+
+_SIGNAL_LABELS: Dict[str, str] = {
+    "connector_density":   "连接词密度过高",
+    "burstiness":          "句长缺乏变化（突发度低）",
+    "type_token_ratio":    "词汇多样性偏低",
+    "sentence_uniformity": "句式单一化模板",
+    "para_length_var":     "段落长度过于均匀",
+}
+
+
+def build_fragment_explanation(features: Dict, signal_keys: List[str]) -> Dict:
+    """
+    Task 4: 从真实触发的信号构建可审计解释。
+    只输出 signal_keys 中列出的信号，不生成自由文本推断。
+
+    参数
+    ----
+    features    : 特征值字典（用于未来扩展，当前不直接生成自然语言）
+    signal_keys : 真正触发的信号名列表
+
+    返回
+    ----
+    {summary: str, signal_keys: list[str], evidence_labels: list[str]}
+    """
+    triggered = [k for k in signal_keys if k in _SIGNAL_LABELS]
+    evidence_labels = [_SIGNAL_LABELS[k] for k in triggered]
+
+    if evidence_labels:
+        summary = "检测到以下风险信号：" + "；".join(evidence_labels)
+    else:
+        summary = "存在多项风险信号"
+
+    return {
+        "summary": summary,
+        "signal_keys": triggered,
+        "evidence_labels": evidence_labels,
+    }
+
+
+# ─────────────────────────────────────────────────────────
 # Layer 1：文体特征
 # ─────────────────────────────────────────────────────────
 
@@ -128,14 +261,14 @@ def _connector_density(text: str) -> Tuple[float, float]:
 
 # 典型 AI 学术句式
 _AI_PATTERNS = [
-    r'[\u4e00-\u9fff]{2,}是[\u4e00-\u9fff]{2,}',      # X是Y
-    r'[\u4e00-\u9fff]{2,}具有[\u4e00-\u9fff]{2,}',     # X具有Y
-    r'[\u4e00-\u9fff]{2,}表明[\u4e00-\u9fff]{2,}',     # X表明Y
-    r'[\u4e00-\u9fff]{2,}需要[\u4e00-\u9fff]{2,}',     # X需要Y
-    r'[\u4e00-\u9fff]{2,}可以[\u4e00-\u9fff]{2,}',     # X可以Y
-    r'[\u4e00-\u9fff]{2,}有助于[\u4e00-\u9fff]{2,}',   # X有助于Y
-    r'[\u4e00-\u9fff]{2,}体现了[\u4e00-\u9fff]{2,}',   # X体现了Y
-    r'[\u4e00-\u9fff]{2,}发挥[\u4e00-\u9fff]{1,}作用',  # 发挥X作用
+    r'[\u4e00-\u9fff]{2,}是[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}具有[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}表明[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}需要[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}可以[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}有助于[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}体现了[\u4e00-\u9fff]{2,}',
+    r'[\u4e00-\u9fff]{2,}发挥[\u4e00-\u9fff]{1,}作用',
 ]
 
 
@@ -207,11 +340,11 @@ def analyze_stylometric(text: str) -> Dict:
     return {
         'ai_score': round(score, 3),
         'features': {
-            'burstiness':         {'value': bursty_raw, 'risk': bursty_risk, 'label': '突发度（低=AI）'},
-            'type_token_ratio':   {'value': ttr_raw,   'risk': ttr_risk,    'label': '词汇多样性（低=AI）'},
-            'connector_density':  {'value': conn_raw,  'risk': conn_risk,   'label': '连接词密度（高=AI）'},
-            'sentence_uniformity':{'value': unif_raw,  'risk': unif_risk,   'label': '句式单一性（高=AI）'},
-            'para_length_var':    {'value': pvar_raw,  'risk': pvar_risk,   'label': '段落长度方差（低=AI）'},
+            'burstiness':          {'value': bursty_raw, 'risk': bursty_risk, 'label': '突发度（低=AI）'},
+            'type_token_ratio':    {'value': ttr_raw,   'risk': ttr_risk,    'label': '词汇多样性（低=AI）'},
+            'connector_density':   {'value': conn_raw,  'risk': conn_risk,   'label': '连接词密度（高=AI）'},
+            'sentence_uniformity': {'value': unif_raw,  'risk': unif_risk,   'label': '句式单一性（高=AI）'},
+            'para_length_var':     {'value': pvar_raw,  'risk': pvar_risk,   'label': '段落长度方差（低=AI）'},
         },
         'stats': {
             'sentence_count': len(sentences),
@@ -222,49 +355,29 @@ def analyze_stylometric(text: str) -> Dict:
     }
 
 
-# ─────────────────────────────────────────────────────────
-# Layer 1 段落级打分（仅文体特征，用于报告高亮）
-# ─────────────────────────────────────────────────────────
+def _score_section(section: Dict) -> Dict:
+    """对单个章节打文体分，返回补充了 score / tier 的 section dict。"""
+    content = section.get("content", "")
+    if len(content) < 30:
+        return {**section, "score": None, "tier": "skip"}
+    stylo = analyze_stylometric(content)
+    score_100 = int(stylo["ai_score"] * 100)
+    tier = score_to_tier(score_100)
 
-def analyze_sections(text: str) -> List[Dict]:
-    """
-    对每个段落单独做文体打分。
-    返回段落列表，含 text_preview / score / tier。
-    """
-    paragraphs = split_paragraphs(text)
-    if not paragraphs:
-        paragraphs = [text]
+    # 找出触发的信号 key（risk > 0.5 视为触发）
+    triggered_keys = [
+        k for k, v in stylo["features"].items()
+        if v["risk"] > 0.5
+    ]
+    explanation = build_fragment_explanation(stylo["features"], triggered_keys)
 
-    results = []
-    for idx, para in enumerate(paragraphs):
-        if len(para) < 30:
-            results.append({
-                'index': idx,
-                'text_preview': para[:80],
-                'char_count': len(para),
-                'score': None,
-                'tier': 'skip',
-            })
-            continue
-        stylo = analyze_stylometric(para)
-        score_100 = int(stylo['ai_score'] * 100)
-        tier = _score_to_tier(score_100)
-        results.append({
-            'index': idx,
-            'text_preview': para[:100] + ('...' if len(para) > 100 else ''),
-            'char_count': len(para),
-            'score': score_100,
-            'tier': tier,
-        })
-    return results
-
-
-def _score_to_tier(score: int) -> str:
-    if score >= 65:
-        return 'significant'
-    if score >= 40:
-        return 'suspected'
-    return 'unmarked'
+    return {
+        **section,
+        "score": score_100,
+        "tier": tier,
+        "stylometric": stylo,
+        "explanation": explanation,
+    }
 
 
 # ─────────────────────────────────────────────────────────
@@ -319,7 +432,6 @@ async def llm_score(
             max_tokens=200,
         )
         raw = response.choices[0].message.content.strip()
-        # 提取 JSON（有些模型会加 markdown 代码块）
         m = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
         if not m:
             raise ValueError(f'No JSON in response: {raw[:200]}')
@@ -364,24 +476,11 @@ def _final_score(stylo_score: float, llm_prob: Optional[int]) -> Tuple[int, str]
     return final, confidence
 
 
-def _tier_label(score: int) -> str:
-    if score >= 65:
-        return 'high'
-    if score >= 40:
-        return 'medium'
-    return 'low'
-
-
 def _tier_cn(tier: str) -> str:
-    return {'high': '高风险', 'medium': '中等风险', 'low': '低风险'}.get(tier, tier)
-
-
-def _section_tier_cn(tier: str) -> str:
     return {
         'significant': '显著疑似',
         'suspected': '疑似',
         'unmarked': '未标记',
-        'skip': '段落过短',
     }.get(tier, tier)
 
 
@@ -397,71 +496,135 @@ async def detect_text(
     detect_base_url: Optional[str] = None,
 ) -> Dict:
     """
-    对文本执行完整 AIGC 检测，返回可直接序列化的报告 dict。
+    对文本执行完整 AIGC 检测，返回可直接序列化的 MVP 报告 dict。
 
-    参数
-    ----
-    text         : 待检测文本
-    use_llm      : 是否调用 LLM 打分（需要 API Key 配置）
-    detect_model : 覆盖默认检测模型（不填则用 POLISH_MODEL）
+    契约字段
+    --------
+    document_score   : int 0-100
+    document_tier    : significant | suspected | unmarked
+    confidence       : high | medium | low
+    sections         : List[section]
+    fragments        : List[fragment]  — MVP: text + score + tier (无 span 偏移量)
+    explanations     : List[explanation]
+    report_metadata  : {char_count, processing_time_ms, llm_used, llm_available, model_name}
     """
     import time
     t0 = time.time()
 
-    # — Layer 1：文体特征 —
+    # — Layer 1：文体特征（全文）—
     stylo = analyze_stylometric(text)
-    sections = analyze_sections(text)
 
-    # — Layer 2：LLM —
-    llm_result: Dict = {'available': False, 'aigc_probability': None, 'confidence': 'unavailable', 'signals': []}
+    # — 章节解析 + 章节级打分 —
+    raw_sections = split_document_sections(text)
+    scored_sections = [_score_section(s) for s in raw_sections]
+
+    # — Layer 2：LLM（可选）—
+    llm_result: Dict = {
+        'available': False,
+        'aigc_probability': None,
+        'confidence': 'unavailable',
+        'signals': [],
+    }
+    model_name: Optional[str] = None
     if use_llm:
-        model     = detect_model     or settings.DETECT_MODEL     or settings.POLISH_MODEL
-        api_key   = detect_api_key   or settings.DETECT_API_KEY   or settings.POLISH_API_KEY
-        base_url  = detect_base_url  or settings.DETECT_BASE_URL  or settings.POLISH_BASE_URL
-        if api_key and base_url and model:
-            llm_result = await llm_score(text, model, api_key, base_url)
+        model_name = detect_model or settings.DETECT_MODEL or settings.POLISH_MODEL
+        api_key    = detect_api_key  or settings.DETECT_API_KEY  or settings.POLISH_API_KEY
+        base_url   = detect_base_url or settings.DETECT_BASE_URL or settings.POLISH_BASE_URL
+        if api_key and base_url and model_name:
+            llm_result = await llm_score(text, model_name, api_key, base_url)
 
-    # — 综合 —
+    # — 综合打分 —
     doc_score, confidence = _final_score(
         stylo['ai_score'],
         llm_result.get('aigc_probability') if llm_result['available'] else None,
     )
-    doc_tier = _tier_label(doc_score)
+    doc_tier = score_to_tier(doc_score)
 
-    # 统计被标记字数（significant + suspected 段落）
+    # — fragments: 所有章节作为片段，按分数排序 —
+    fragments = []
+    for idx, sec in enumerate(scored_sections):
+        if sec.get("tier") == "skip":
+            continue
+        frag_expl = sec.get("explanation", {})
+        fragments.append({
+            "text": (sec.get("content") or sec.get("title") or "")[:500],
+            "score": sec["score"],
+            "tier": sec["tier"],
+            "section_id": idx,
+            "explanation": frag_expl,
+        })
+    # 按风险分降序
+    fragments.sort(key=lambda f: f["score"] if f["score"] is not None else -1, reverse=True)
+
+    # — explanations: 聚合所有触发过信号的解释 —
+    explanations = []
+    seen_keys: set = set()
+    for frag in fragments:
+        expl = frag.get("explanation", {})
+        for key in expl.get("signal_keys", []):
+            if key not in seen_keys:
+                seen_keys.add(key)
+                explanations.append({
+                    "signal_key": key,
+                    "label": _SIGNAL_LABELS.get(key, key),
+                    "summary": expl.get("summary", ""),
+                })
+
+    # — LLM 信号也并入 explanations —
+    for sig in llm_result.get("signals", []):
+        explanations.append({"signal_key": "llm_signal", "label": "LLM信号", "summary": sig})
+
+    # 统计被标记字数
     flagged_chars = sum(
-        s['char_count'] for s in sections
+        s['char_count'] for s in scored_sections
         if s.get('tier') in ('significant', 'suspected')
     )
 
     elapsed_ms = int((time.time() - t0) * 1000)
 
+    # — 章节输出（去掉内部 stylometric 大对象，保留前端需要的字段）—
+    sections_out = []
+    for sec in scored_sections:
+        sections_out.append({
+            "title":      sec.get("title", ""),
+            "char_count": sec.get("char_count", 0),
+            "score":      sec.get("score"),
+            "tier":       sec.get("tier", "skip"),
+            "tier_cn":    _tier_cn(sec.get("tier", "skip")),
+            "text_preview": (sec.get("content") or "")[:100] + ("..." if len(sec.get("content") or "") > 100 else ""),
+        })
+
     return {
-        'document_score': doc_score,
-        'document_tier': doc_tier,
-        'document_tier_cn': _tier_cn(doc_tier),
-        'confidence': confidence,
-        'char_count': len(text),
-        'flagged_char_count': flagged_chars,
-        'processing_time_ms': elapsed_ms,
-        'stylometric': {
-            'ai_score': stylo['ai_score'],
-            'features': stylo['features'],
-            'stats': stylo['stats'],
+        "document_score":    doc_score,
+        "document_tier":     doc_tier,
+        "document_tier_cn":  _tier_cn(doc_tier),
+        "confidence":        confidence,
+        "sections":          sections_out,
+        "fragments":         fragments,
+        "explanations":      explanations,
+        "report_metadata": {
+            "char_count":         len(text),
+            "flagged_char_count": flagged_chars,
+            "processing_time_ms": elapsed_ms,
+            "llm_used":           llm_result["available"],
+            "llm_available":      bool(use_llm and model_name),
+            "model_name":         model_name,
         },
-        'llm': {
-            'available': llm_result['available'],
-            'aigc_probability': llm_result.get('aigc_probability'),
-            'confidence': llm_result.get('confidence'),
-            'signals': llm_result.get('signals', []),
+        # 保留文体详情供前端特征条显示
+        "stylometric": {
+            "ai_score": stylo["ai_score"],
+            "features": stylo["features"],
+            "stats":    stylo["stats"],
         },
-        'sections': [
-            {**s, 'tier_cn': _section_tier_cn(s['tier'])}
-            for s in sections
-        ],
-        'risk_legend': {
-            'significant': {'label': '显著疑似', 'threshold': 65, 'color': 'red'},
-            'suspected':   {'label': '疑似',     'threshold': 40, 'color': 'orange'},
-            'unmarked':    {'label': '未标记',   'threshold': 0,  'color': 'green'},
+        "llm": {
+            "available":        llm_result["available"],
+            "aigc_probability": llm_result.get("aigc_probability"),
+            "confidence":       llm_result.get("confidence"),
+            "signals":          llm_result.get("signals", []),
+        },
+        "risk_legend": {
+            "significant": {"label": "显著疑似", "threshold": DEFAULT_HIGH_THRESHOLD,   "color": "red"},
+            "suspected":   {"label": "疑似",     "threshold": DEFAULT_MEDIUM_THRESHOLD, "color": "orange"},
+            "unmarked":    {"label": "未标记",   "threshold": 0,                        "color": "green"},
         },
     }

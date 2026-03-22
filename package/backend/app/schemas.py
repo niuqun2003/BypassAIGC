@@ -193,3 +193,62 @@ class SegmentEdit(BaseModel):
     """段落编辑请求"""
     segment_index: int = Field(..., ge=0)
     edited_text: str = Field(..., min_length=1)
+
+
+# ── Detection Report Contract ──────────────────────────────────────────────
+
+class DetectionRequest(BaseModel):
+    """AIGC 检测请求"""
+    text: str = Field(..., min_length=10, max_length=100000)
+    use_llm: bool = True
+    detect_model: Optional[str] = None
+    detect_api_key: Optional[str] = None
+    detect_base_url: Optional[str] = None
+
+
+class FragmentResult(BaseModel):
+    """片段风险记录（MVP: 无 start/end 偏移量，inline 高亮为 v2 功能）"""
+    text: str
+    score: int = Field(..., ge=0, le=100)
+    tier: str  # significant | suspected | unmarked
+    section_id: int
+    explanation: Dict[str, Any] = {}
+
+
+class SectionResult(BaseModel):
+    """章节风险记录"""
+    title: str
+    char_count: int
+    score: Optional[int] = None
+    tier: str
+    tier_cn: str
+    text_preview: str
+
+
+class ExplanationItem(BaseModel):
+    """可审计解释条目，仅基于真实触发的信号"""
+    signal_key: str
+    label: str
+    summary: str
+
+
+class ReportMetadata(BaseModel):
+    """报告元数据"""
+    char_count: int
+    flagged_char_count: int
+    processing_time_ms: int
+    llm_used: bool
+    llm_available: bool
+    model_name: Optional[str] = None
+
+
+class DetectionReport(BaseModel):
+    """MVP 检测报告完整契约"""
+    document_score: int = Field(..., ge=0, le=100)
+    document_tier: str
+    document_tier_cn: str
+    confidence: str
+    sections: List[SectionResult]
+    fragments: List[FragmentResult]
+    explanations: List[ExplanationItem]
+    report_metadata: ReportMetadata

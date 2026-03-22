@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
-from typing import Optional
+from datetime import datetime
 
 from app.database import get_db
 from app.models.models import User
+from app.schemas import DetectionRequest
 from app.services.detection_service import detect_text
-from datetime import datetime
 
 router = APIRouter(prefix="/detection", tags=["detection"])
 
@@ -21,14 +20,6 @@ def get_current_user(card_key: str, db: Session = Depends(get_db)) -> User:
     user.last_used = datetime.utcnow()
     db.commit()
     return user
-
-
-class DetectionRequest(BaseModel):
-    text: str = Field(..., min_length=20, description="待检测文本，至少20字")
-    use_llm: bool = Field(True, description="是否调用LLM打分（更准确，消耗少量API额度）")
-    detect_model: Optional[str] = Field(None, description="覆盖检测用模型名")
-    detect_api_key: Optional[str] = Field(None, description="覆盖检测用API Key")
-    detect_base_url: Optional[str] = Field(None, description="覆盖检测用Base URL")
 
 
 @router.post("/analyze")
