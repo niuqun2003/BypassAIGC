@@ -598,7 +598,17 @@ const SessionDetailPage = () => {
 
           {/* AIGC 检测 Tab */}
           {activeTab === 'detection' && (
-            <DetectionReport text={getFinalText()} />
+            session.status !== 'completed' ? (
+              <div className="bg-white rounded-2xl shadow-ios p-8 flex flex-col items-center gap-3 text-center">
+                <Shield className="w-10 h-10 text-gray-300" />
+                <p className="text-[15px] font-semibold text-black">优化尚未完成</p>
+                <p className="text-[13px] text-ios-gray max-w-xs">
+                  请等待文本优化完成后再进行 AIGC 风险筛查，以确保检测结果基于完整内容。
+                </p>
+              </div>
+            ) : (
+              <DetectionReport text={getFinalText()} />
+            )
           )}
         </div>
       </div>
