@@ -1,22 +1,26 @@
 import React, { useState } from 'react';
-import { Shield, AlertTriangle, CheckCircle, Loader, ChevronDown, ChevronUp, Zap } from 'lucide-react';
+import { Shield, AlertTriangle, CheckCircle, Loader, ChevronDown, ChevronUp, Zap, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { detectionAPI } from '../api';
 
 // ─── 辅助函数 ────────────────────────────────────────────
 
 const tierColor = (tier) => ({
-  high:   { bg: 'bg-red-50',    border: 'border-red-200',   text: 'text-red-700',    bar: 'bg-red-500' },
-  medium: { bg: 'bg-orange-50', border: 'border-orange-200',text: 'text-orange-700', bar: 'bg-orange-400' },
-  low:    { bg: 'bg-green-50',  border: 'border-green-200', text: 'text-green-700',  bar: 'bg-green-500' },
-}[tier] || { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700', bar: 'bg-gray-400' });
+  significant: { bg: 'bg-red-50',    border: 'border-red-200',   text: 'text-red-700',    ring: '#ef4444' },
+  suspected:   { bg: 'bg-orange-50', border: 'border-orange-200',text: 'text-orange-700', ring: '#f97316' },
+  unmarked:    { bg: 'bg-green-50',  border: 'border-green-200', text: 'text-green-700',  ring: '#22c55e' },
+}[tier] || { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-700', ring: '#6b7280' });
 
-const sectionTierColor = (tier) => ({
+const tierBadge = (tier) => ({
   significant: 'bg-red-100 text-red-700 border-red-200',
   suspected:   'bg-orange-100 text-orange-700 border-orange-200',
   unmarked:    'bg-green-100 text-green-700 border-green-200',
   skip:        'bg-gray-100 text-gray-400 border-gray-200',
 }[tier] || 'bg-gray-100 text-gray-500 border-gray-200');
+
+const tierCnLabel = (tier) => ({
+  significant: '显著疑似', suspected: '疑似', unmarked: '未标记', skip: '段落过短',
+}[tier] || tier);
 
 const featureBarColor = (risk) => {
   if (risk >= 0.65) return 'bg-red-500';
@@ -38,15 +42,13 @@ const ScoreRing = ({ score, tier }) => {
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
 
-  const ringColor = { high: '#ef4444', medium: '#f97316', low: '#22c55e' }[tier] || '#6b7280';
-
   return (
     <svg width="120" height="120" viewBox="0 0 120 120">
       <circle cx="60" cy="60" r={radius} fill="none" stroke="#e5e7eb" strokeWidth="10" />
       <circle
         cx="60" cy="60" r={radius}
         fill="none"
-        stroke={ringColor}
+        stroke={colors.ring}
         strokeWidth="10"
         strokeLinecap="round"
         strokeDasharray={circumference}
@@ -54,7 +56,7 @@ const ScoreRing = ({ score, tier }) => {
         transform="rotate(-90 60 60)"
         style={{ transition: 'stroke-dashoffset 0.8s ease' }}
       />
-      <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="bold" fill={ringColor}>{score}</text>
+      <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="bold" fill={colors.ring}>{score}</text>
       <text x="60" y="74" textAnchor="middle" fontSize="11" fill="#6b7280">/ 100</text>
     </svg>
   );
@@ -63,11 +65,13 @@ const ScoreRing = ({ score, tier }) => {
 // ─── 主组件 ──────────────────────────────────────────────
 
 const DetectionReport = ({ text }) => {
-  const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [useLlm, setUseLlm] = useState(true);
-  const [showSections, setShowSections] = useState(false);
-  const [showFeatures, setShowFeatures] = useState(true);
+  const [report, setReport]           = useState(null);
+  const [loading, setLoading]         = useState(false);
+  const [useLlm, setUseLlm]           = useState(true);
+  const [showSections, setShowSections]   = useState(false);
+  const [showFragments, setShowFragments] = useState(true);
+  const [showFeatures, setShowFeatures]   = useState(true);
+  const [showExplanations, setShowExplanations] = useState(false);
 
   const runDetection = async () => {
     if (!text || text.length < 20) {
@@ -87,6 +91,7 @@ const DetectionReport = ({ text }) => {
   };
 
   const colors = report ? tierColor(report.document_tier) : null;
+  const meta   = report?.report_metadata ?? {};
 
   return (
     <div className="space-y-5">
@@ -94,9 +99,9 @@ const DetectionReport = ({ text }) => {
       <div className="bg-white rounded-2xl shadow-ios p-5">
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
-            <h3 className="text-[17px] font-bold text-black">AIGC 风险检测</h3>
+            <h3 className="text-[17px] font-bold text-black">AIGC 风险筛查</h3>
             <p className="text-[13px] text-ios-gray mt-0.5">
-              对改写后的文本进行 AIGC 含量评估，辅助判断是否值得提交知网检测
+              对改写后的文本进行多维风险评估，辅助判断是否值得提交知网检测
             </p>
           </div>
 
@@ -158,32 +163,34 @@ const DetectionReport = ({ text }) => {
               <div className="flex-1 min-w-[180px] space-y-3">
                 <div>
                   <p className="text-[13px] text-ios-gray">AIGC 风险分</p>
-                  <p className={`text-[28px] font-bold ${colors.text}`}>{report.document_score} <span className="text-[14px] font-normal">/ 100</span></p>
+                  <p className={`text-[28px] font-bold ${colors.text}`}>
+                    {report.document_score} <span className="text-[14px] font-normal">/ 100</span>
+                  </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-[13px]">
                   <div>
                     <p className="text-ios-gray">总字数</p>
-                    <p className="font-semibold text-black">{report.char_count.toLocaleString()}</p>
+                    <p className="font-semibold text-black">{meta.char_count?.toLocaleString() ?? '—'}</p>
                   </div>
                   <div>
-                    <p className="text-ios-gray">疑似AIGC字数</p>
-                    <p className={`font-semibold ${report.flagged_char_count > 0 ? colors.text : 'text-green-700'}`}>
-                      {report.flagged_char_count.toLocaleString()}
+                    <p className="text-ios-gray">风险字数</p>
+                    <p className={`font-semibold ${meta.flagged_char_count > 0 ? colors.text : 'text-green-700'}`}>
+                      {meta.flagged_char_count?.toLocaleString() ?? '—'}
                     </p>
                   </div>
                   <div>
-                    <p className="text-ios-gray">段落数</p>
-                    <p className="font-semibold text-black">{report.stylometric.stats.paragraph_count}</p>
+                    <p className="text-ios-gray">章节数</p>
+                    <p className="font-semibold text-black">{report.sections.length}</p>
                   </div>
                   <div>
                     <p className="text-ios-gray">检测耗时</p>
-                    <p className="font-semibold text-black">{(report.processing_time_ms / 1000).toFixed(1)}s</p>
+                    <p className="font-semibold text-black">{((meta.processing_time_ms ?? 0) / 1000).toFixed(1)}s</p>
                   </div>
                 </div>
               </div>
 
               {/* LLM 信号 */}
-              {report.llm.available && report.llm.signals.length > 0 && (
+              {report.llm?.available && report.llm.signals.length > 0 && (
                 <div className="flex-1 min-w-[200px]">
                   <div className="flex items-center gap-1.5 mb-2">
                     <Zap className="w-4 h-4 text-ios-blue" />
@@ -201,23 +208,131 @@ const DetectionReport = ({ text }) => {
                 </div>
               )}
 
-              {!report.llm.available && (
-                <div className="text-[12px] text-ios-gray bg-gray-50 rounded-lg px-3 py-2 self-start">
-                  LLM 评分不可用（未配置 API 或请求失败）<br />
+              {!report.llm?.available && (
+                <div className="text-[12px] text-ios-gray bg-white/60 rounded-lg px-3 py-2 self-start">
+                  LLM 评分不可用（未配置 API 或已禁用）<br />
                   当前结果仅基于文体特征
                 </div>
               )}
             </div>
 
-            {/* 风险提示 */}
+            {/* 免责说明 */}
             <div className="mt-4 pt-4 border-t border-current/10">
               <p className="text-[12px] text-ios-gray/80">
-                ⚠️ 本检测结果仅供参考，不代表知网等商业系统的实际判定结果。建议分数≥60分时进行手动修改后再提交知网检测。
+                ⚠️ 本结果为 AIGC 风险信号参考，不代表知网等商业系统的实际判定。建议风险分 ≥60 时手动修改后再提交检测。
               </p>
             </div>
           </div>
 
-          {/* ② 文体特征详情 */}
+          {/* ② 片段证据列表 */}
+          {report.fragments?.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-ios overflow-hidden">
+              <button
+                onClick={() => setShowFragments(v => !v)}
+                className="w-full flex items-center justify-between p-5 hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-[15px] font-bold text-black">风险片段证据</span>
+                  <span className="text-[12px] text-ios-gray">
+                    {report.fragments.filter(f => f.tier !== 'unmarked').length} 个疑似片段
+                  </span>
+                </div>
+                {showFragments ? <ChevronUp className="w-5 h-5 text-ios-gray" /> : <ChevronDown className="w-5 h-5 text-ios-gray" />}
+              </button>
+
+              {showFragments && (
+                <div className="border-t border-gray-100 divide-y divide-gray-50">
+                  {report.fragments.slice(0, 10).map((frag, i) => (
+                    <div key={i} className="px-5 py-4 space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${tierBadge(frag.tier)}`}>
+                          {tierCnLabel(frag.tier)}
+                        </span>
+                        <span className={`text-[15px] font-bold ${
+                          frag.tier === 'significant' ? 'text-red-600' :
+                          frag.tier === 'suspected'   ? 'text-orange-600' : 'text-green-600'
+                        }`}>{frag.score}分</span>
+                      </div>
+                      <p className="text-[13px] text-gray-700 leading-relaxed line-clamp-3 bg-gray-50 rounded-lg px-3 py-2">
+                        {frag.text}
+                      </p>
+                      {frag.explanation?.summary && (
+                        <p className="text-[12px] text-ios-gray flex items-start gap-1">
+                          <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-ios-blue/70" />
+                          {frag.explanation.summary}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                  {report.fragments.length > 10 && (
+                    <p className="text-center text-[12px] text-ios-gray py-3">
+                      仅展示前10个片段，共 {report.fragments.length} 个
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ③ 章节风险分布 */}
+          <div className="bg-white rounded-2xl shadow-ios overflow-hidden">
+            <button
+              onClick={() => setShowSections(v => !v)}
+              className="w-full flex items-center justify-between p-5 hover:bg-gray-50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-[15px] font-bold text-black">章节风险分布</span>
+                <div className="flex gap-2 text-[12px]">
+                  {['significant', 'suspected', 'unmarked'].map(t => {
+                    const cnt = report.sections.filter(s => s.tier === t).length;
+                    if (cnt === 0) return null;
+                    return (
+                      <span key={t} className={`px-2 py-0.5 rounded-full border ${tierBadge(t)}`}>
+                        {tierCnLabel(t)} ×{cnt}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              {showSections ? <ChevronUp className="w-5 h-5 text-ios-gray" /> : <ChevronDown className="w-5 h-5 text-ios-gray" />}
+            </button>
+
+            {showSections && (
+              <div className="border-t border-gray-100 divide-y divide-gray-50">
+                {report.sections.filter(s => s.tier !== 'skip').map((sec, i) => (
+                  <div key={i} className="flex items-start gap-3 px-5 py-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-[12px] font-bold text-ios-gray">
+                      {i + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {sec.title && (
+                        <p className="text-[13px] font-semibold text-black mb-0.5">{sec.title}</p>
+                      )}
+                      <p className="text-[12px] text-gray-500 leading-relaxed line-clamp-2">{sec.text_preview}</p>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${tierBadge(sec.tier)}`}>
+                          {sec.tier_cn}
+                        </span>
+                        {sec.score !== null && (
+                          <span className="text-[11px] text-ios-gray">{sec.char_count}字 · 风险{sec.score}分</span>
+                        )}
+                      </div>
+                    </div>
+                    {sec.score !== null && (
+                      <div className="flex-shrink-0 w-10 text-right">
+                        <span className={`text-[15px] font-bold ${
+                          sec.tier === 'significant' ? 'text-red-600' :
+                          sec.tier === 'suspected'   ? 'text-orange-600' : 'text-green-600'
+                        }`}>{sec.score}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ④ 文体特征详情 */}
           <div className="bg-white rounded-2xl shadow-ios overflow-hidden">
             <button
               onClick={() => setShowFeatures(v => !v)}
@@ -229,7 +344,6 @@ const DetectionReport = ({ text }) => {
 
             {showFeatures && (
               <div className="px-5 pb-5 space-y-4 border-t border-gray-100">
-                {/* 两列特征条 */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
                   {Object.entries(report.stylometric.features).map(([key, feat]) => {
                     const rl = riskLabel(feat.risk);
@@ -253,8 +367,6 @@ const DetectionReport = ({ text }) => {
                     );
                   })}
                 </div>
-
-                {/* 统计数字 */}
                 <div className="flex gap-4 pt-2 flex-wrap text-[13px] text-ios-gray border-t border-gray-100">
                   <span>句子：{report.stylometric.stats.sentence_count}</span>
                   <span>段落：{report.stylometric.stats.paragraph_count}</span>
@@ -264,62 +376,39 @@ const DetectionReport = ({ text }) => {
             )}
           </div>
 
-          {/* ③ 段落分布 */}
-          <div className="bg-white rounded-2xl shadow-ios overflow-hidden">
-            <button
-              onClick={() => setShowSections(v => !v)}
-              className="w-full flex items-center justify-between p-5 hover:bg-gray-50 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-[15px] font-bold text-black">段落风险分布</span>
-                <div className="flex gap-2 text-[12px]">
-                  {['significant', 'suspected', 'unmarked'].map(t => {
-                    const cnt = report.sections.filter(s => s.tier === t).length;
-                    if (cnt === 0) return null;
-                    return (
-                      <span key={t} className={`px-2 py-0.5 rounded-full border ${sectionTierColor(t)}`}>
-                        {report.risk_legend[t]?.label} ×{cnt}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-              {showSections ? <ChevronUp className="w-5 h-5 text-ios-gray" /> : <ChevronDown className="w-5 h-5 text-ios-gray" />}
-            </button>
+          {/* ⑤ 信号解释说明 */}
+          {report.explanations?.length > 0 && (
+            <div className="bg-white rounded-2xl shadow-ios overflow-hidden">
+              <button
+                onClick={() => setShowExplanations(v => !v)}
+                className="w-full flex items-center justify-between p-5 hover:bg-gray-50 transition-colors"
+              >
+                <span className="text-[15px] font-bold text-black">信号解释说明</span>
+                {showExplanations ? <ChevronUp className="w-5 h-5 text-ios-gray" /> : <ChevronDown className="w-5 h-5 text-ios-gray" />}
+              </button>
 
-            {showSections && (
-              <div className="border-t border-gray-100 divide-y divide-gray-50">
-                {report.sections.filter(s => s.tier !== 'skip').map((sec) => (
-                  <div key={sec.index} className="flex items-start gap-3 px-5 py-3">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-[12px] font-bold text-ios-gray">
-                      {sec.index + 1}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] text-gray-700 leading-relaxed line-clamp-2">{sec.text_preview}</p>
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <span className={`text-[11px] px-2 py-0.5 rounded-full border ${sectionTierColor(sec.tier)}`}>
-                          {sec.tier_cn}
-                        </span>
-                        {sec.score !== null && (
-                          <span className="text-[11px] text-ios-gray">{sec.char_count}字 · 风险{sec.score}分</span>
+              {showExplanations && (
+                <div className="border-t border-gray-100 px-5 pb-5 pt-4 space-y-3">
+                  {report.explanations.map((expl, i) => (
+                    <div key={i} className="flex items-start gap-2 text-[13px]">
+                      <AlertTriangle className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-gray-800">{expl.label}</span>
+                        {expl.summary && (
+                          <p className="text-ios-gray mt-0.5">{expl.summary}</p>
                         )}
                       </div>
                     </div>
-                    {sec.score !== null && (
-                      <div className="flex-shrink-0 w-10 text-right">
-                        <span className={`text-[15px] font-bold ${
-                          sec.tier === 'significant' ? 'text-red-600' :
-                          sec.tier === 'suspected'   ? 'text-orange-600' : 'text-green-600'
-                        }`}>{sec.score}</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  ))}
+                  <p className="text-[11px] text-ios-gray/70 pt-2 border-t border-gray-100">
+                    以上解释均来自实际触发的检测信号，不含推断性判断。
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* ④ 图例 */}
+          {/* ⑥ 风险图例 */}
           <div className="bg-white rounded-2xl shadow-ios p-4 flex items-center gap-6 flex-wrap text-[12px] text-ios-gray">
             <span className="font-semibold text-black text-[13px]">风险图例</span>
             {Object.entries(report.risk_legend).map(([key, val]) => (
