@@ -26,6 +26,10 @@ else:
 # 设置工作目录为应用目录（确保数据库和配置文件在正确位置）
 os.chdir(APP_DIR)
 
+# 将应用根目录写入环境变量，供 backend/app/config.py 读取，
+# 避免 config.py 靠 __file__ 相对路径推算目录造成多 .env 文件问题
+os.environ['APP_BASE_DIR'] = APP_DIR
+
 # 设置环境变量指向 exe 同目录的 .env 文件
 ENV_FILE = os.path.join(APP_DIR, '.env')
 DB_FILE = os.path.join(APP_DIR, 'ai_polish.db')
@@ -54,7 +58,7 @@ import uvicorn
 # 导入后端应用组件
 from app.config import settings
 from app.database import init_db
-from app.routes import admin, export, optimization, prompts, upload
+from app.routes import admin, detection, export, optimization, prompts, upload
 from app.models.models import CustomPrompt
 from app.database import SessionLocal
 from app.services.ai_service import get_default_polish_prompt, get_default_enhance_prompt
@@ -112,6 +116,7 @@ async def add_no_cache_headers(request: Request, call_next):
 
 # 注册 API 路由（添加 /api 前缀，与 backend/app/main.py 保持一致）
 app.include_router(admin.router, prefix="/api")
+app.include_router(detection.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(optimization.router, prefix="/api")
 app.include_router(export.router, prefix="/api")

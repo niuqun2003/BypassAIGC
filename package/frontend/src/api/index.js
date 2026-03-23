@@ -148,9 +148,9 @@ export const optimizationAPI = {
 
 // Detection API
 export const detectionAPI = {
-  analyze: (text, useLlm = true) =>
-    api.post('/detection/analyze', { text, use_llm: useLlm }, {
-      timeout: 60000,
+  analyze: (text, useLlm = true, useCurvature = true) =>
+    api.post('/detection/analyze', { text, use_llm: useLlm, use_curvature: useCurvature }, {
+      timeout: 90000,
     }),
 };
 
@@ -160,6 +160,14 @@ export const uploadAPI = {
     const formData = new FormData();
     formData.append('file', file);
     return api.post('/upload/extract-text', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
+  },
+  parseCnkiReport: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/upload/cnki-report', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 60000,
     });

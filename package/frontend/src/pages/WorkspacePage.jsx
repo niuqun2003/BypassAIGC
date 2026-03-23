@@ -64,7 +64,9 @@ const SessionItem = memo(({ session, activeSession, onView, onDelete, onRetry })
       </div>
 
       <p className="text-[13px] text-ios-gray leading-snug line-clamp-2 mb-2 pr-6">
-        {session.original_text?.substring(0, 100)}...
+        {session.text_preview
+          ? `${session.text_preview}${session.original_char_count > 60 ? '…' : ''}`
+          : <span className="text-ios-gray/40">—</span>}
       </p>
 
       {session.status === 'processing' && (

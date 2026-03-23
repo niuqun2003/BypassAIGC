@@ -139,23 +139,25 @@ async def list_sessions(
     # 限制最大返回数量为100，避免一次性加载过多数据
     limit = min(limit, 100)
     
-    # 查询会话及其原始文本长度
+    # 查询会话及其原始文本长度和预览（前60字符），不加载全文
     results = db.query(
         OptimizationSession,
-        func.length(OptimizationSession.original_text).label('original_char_count')
+        func.length(OptimizationSession.original_text).label('original_char_count'),
+        func.substr(OptimizationSession.original_text, 1, 60).label('text_preview')
     ).options(
         defer(OptimizationSession.original_text),
         defer(OptimizationSession.error_message)
     ).filter(
         OptimizationSession.user_id == user.id
     ).order_by(OptimizationSession.created_at.desc()).limit(limit).offset(offset).all()
-    
-    # 构造响应，手动注入 original_char_count
+
+    # 构造响应，手动注入 original_char_count 和 text_preview
     sessions = []
-    for session, char_count in results:
+    for session, char_count, preview in results:
         session.original_char_count = char_count or 0
+        session.text_preview = preview or ''
         sessions.append(session)
-        
+
     return sessions
 
 

@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Shield, AlertTriangle, CheckCircle, Loader, ChevronDown, ChevronUp, Zap, Info } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Shield, AlertTriangle, CheckCircle, Loader, ChevronDown, ChevronUp, Zap, Info, FileText, Upload, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { detectionAPI } from '../api';
+import { detectionAPI, uploadAPI } from '../api';
 
 // ─── 辅助函数 ────────────────────────────────────────────
 
@@ -64,14 +64,28 @@ const ScoreRing = ({ score, tier }) => {
 
 // ─── 主组件 ──────────────────────────────────────────────
 
+const cnkiTierColor = (tier) => ({
+  significant: { bg: 'bg-red-50',    text: 'text-red-700',    badge: 'bg-red-100 text-red-700 border-red-200',    bar: 'bg-red-500' },
+  suspected:   { bg: 'bg-orange-50', text: 'text-orange-700', badge: 'bg-orange-100 text-orange-700 border-orange-200', bar: 'bg-orange-400' },
+}[tier] || { bg: 'bg-gray-50', text: 'text-gray-600', badge: 'bg-gray-100 text-gray-500 border-gray-200', bar: 'bg-gray-400' });
+
+const cnkiTierLabel = (tier) => ({ significant: '显著疑似 (红色)', suspected: '疑似 (橙色)' }[tier] || tier);
+
 const DetectionReport = ({ text }) => {
   const [report, setReport]           = useState(null);
   const [loading, setLoading]         = useState(false);
   const [useLlm, setUseLlm]           = useState(true);
+  const [useCurvature, setUseCurvature] = useState(true);
   const [showSections, setShowSections]   = useState(false);
   const [showFragments, setShowFragments] = useState(true);
   const [showFeatures, setShowFeatures]   = useState(true);
   const [showExplanations, setShowExplanations] = useState(false);
+
+  // CNKI 报告解析
+  const [cnkiReport, setCnkiReport]     = useState(null);
+  const [cnkiLoading, setCnkiLoading]   = useState(false);
+  const [showCnkiFragments, setShowCnkiFragments] = useState(true);
+  const cnkiFileRef = useRef(null);
 
   const runDetection = async () => {
     if (!text || text.length < 20) {
@@ -81,12 +95,32 @@ const DetectionReport = ({ text }) => {
     try {
       setLoading(true);
       setReport(null);
-      const resp = await detectionAPI.analyze(text, useLlm);
+      const resp = await detectionAPI.analyze(text, useLlm, useCurvature);
       setReport(resp.data);
     } catch (err) {
       toast.error('检测失败：' + (err.response?.data?.detail || '网络错误'));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const uploadCnkiReport = async (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      toast.error('请上传 PDF 格式的知网检测报告');
+      return;
+    }
+    try {
+      setCnkiLoading(true);
+      setCnkiReport(null);
+      const resp = await uploadAPI.parseCnkiReport(file);
+      setCnkiReport(resp.data);
+      toast.success(`报告解析成功，共 ${resp.data.flagged_fragments?.length ?? 0} 个标色片段`);
+    } catch (err) {
+      toast.error('解析失败：' + (err.response?.data?.detail || '文件格式不支持或非知网报告'));
+    } finally {
+      setCnkiLoading(false);
+      if (cnkiFileRef.current) cnkiFileRef.current.value = '';
     }
   };
 
@@ -115,7 +149,20 @@ const DetectionReport = ({ text }) => {
                 <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${useLlm ? 'translate-x-5' : 'translate-x-1'}`} />
               </div>
               <span className="text-[13px] text-ios-gray">
-                LLM 增强<span className="text-[11px] ml-1 text-ios-gray/60">（更准，耗少量额度）</span>
+                LLM 评分<span className="text-[11px] ml-1 text-ios-gray/60">（更准，耗少量额度）</span>
+              </span>
+            </label>
+
+            {/* 曲率开关 */}
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <div
+                onClick={() => setUseCurvature(v => !v)}
+                className={`relative w-10 h-6 rounded-full transition-colors ${useCurvature ? 'bg-purple-500' : 'bg-gray-300'}`}
+              >
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${useCurvature ? 'translate-x-5' : 'translate-x-1'}`} />
+              </div>
+              <span className="text-[13px] text-ios-gray">
+                概率曲率<span className="text-[11px] ml-1 text-ios-gray/60">（Fast-DetectGPT）</span>
               </span>
             </label>
 
@@ -134,11 +181,160 @@ const DetectionReport = ({ text }) => {
         </div>
       </div>
 
+      {/* 知网报告解析区 */}
+      <div className="bg-white rounded-2xl shadow-ios p-5">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <h3 className="text-[17px] font-bold text-black flex items-center gap-2">
+              <FileText className="w-5 h-5 text-orange-500" />
+              知网检测报告解析
+            </h3>
+            <p className="text-[13px] text-ios-gray mt-0.5">
+              上传知网 AIGC 全文报告单（PDF），自动提取标红/橙的高风险段落
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              ref={cnkiFileRef}
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={(e) => uploadCnkiReport(e.target.files?.[0])}
+            />
+            <button
+              onClick={() => cnkiFileRef.current?.click()}
+              disabled={cnkiLoading}
+              className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold py-2 px-5 rounded-xl transition-all active:scale-[0.98] text-[15px]"
+            >
+              {cnkiLoading ? (
+                <><Loader className="w-4 h-4 animate-spin" />解析中...</>
+              ) : (
+                <><Upload className="w-4 h-4" />上传报告</>
+              )}
+            </button>
+            {cnkiReport && (
+              <button
+                onClick={() => setCnkiReport(null)}
+                className="p-2 text-ios-gray hover:text-red-500 transition-colors"
+                title="清除报告"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* 报告解析结果 */}
+        {cnkiReport && (
+          <div className="mt-5 space-y-4">
+            {/* 元信息 + 总览 */}
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[13px]">
+                <div>
+                  <p className="text-ios-gray">论文标题</p>
+                  <p className="font-semibold text-black truncate" title={cnkiReport.metadata.title}>
+                    {cnkiReport.metadata.title || '—'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-ios-gray">作者</p>
+                  <p className="font-semibold text-black">{cnkiReport.metadata.author || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-ios-gray">检测时间</p>
+                  <p className="font-semibold text-black">{cnkiReport.metadata.detection_time || '—'}</p>
+                </div>
+                <div>
+                  <p className="text-ios-gray">报告编号</p>
+                  <p className="font-semibold text-black text-[11px]">{cnkiReport.metadata.report_no || '—'}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-6 pt-2 border-t border-orange-200 flex-wrap text-[13px]">
+                <div>
+                  <span className="text-ios-gray">总字数：</span>
+                  <span className="font-semibold">{cnkiReport.summary.total_chars?.toLocaleString() ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="text-ios-gray">疑似AI字数：</span>
+                  <span className="font-bold text-red-600">{cnkiReport.summary.ai_chars?.toLocaleString() ?? '—'}</span>
+                </div>
+                <div>
+                  <span className="text-ios-gray">AI率：</span>
+                  <span className={`font-bold ${(cnkiReport.summary.ai_ratio ?? 0) >= 0.1 ? 'text-red-600' : 'text-green-600'}`}>
+                    {cnkiReport.summary.ai_ratio != null ? `${(cnkiReport.summary.ai_ratio * 100).toFixed(1)}%` : '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-ios-gray">标色片段：</span>
+                  <span className="font-bold text-orange-600">{cnkiReport.flagged_fragments.length} 处</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 标色片段列表 */}
+            {cnkiReport.flagged_fragments.length > 0 && (
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setShowCnkiFragments(v => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+                >
+                  <span className="text-[14px] font-semibold text-black">
+                    标色高风险片段（{cnkiReport.flagged_fragments.length} 处）
+                  </span>
+                  {showCnkiFragments ? <ChevronUp className="w-4 h-4 text-ios-gray" /> : <ChevronDown className="w-4 h-4 text-ios-gray" />}
+                </button>
+                {showCnkiFragments && (
+                  <div className="border-t border-gray-100 divide-y divide-gray-50">
+                    {cnkiReport.flagged_fragments.map((frag, i) => {
+                      const tc = cnkiTierColor(frag.tier);
+                      return (
+                        <div key={i} className={`px-4 py-3 space-y-2 ${tc.bg}`}>
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${tc.badge}`}>
+                                {cnkiTierLabel(frag.tier)}
+                              </span>
+                              {frag.ai_ratio > 0 && (
+                                <span className={`text-[11px] font-semibold ${tc.text}`}>
+                                  AI率 {(frag.ai_ratio * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-ios-gray">
+                              第{frag.page}页 · {frag.char_count > 0 ? `${frag.char_count}字` : ''}
+                            </span>
+                          </div>
+                          <p className="text-[13px] text-gray-800 leading-relaxed bg-white/70 rounded-lg px-3 py-2">
+                            {frag.text}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {cnkiReport.flagged_fragments.length === 0 && (
+              <div className="flex items-center gap-2 text-green-700 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-[13px]">
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                报告中未发现标色片段，文本当前通过知网检测
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* 加载中 */}
       {loading && (
         <div className="bg-white rounded-2xl shadow-ios p-8 flex flex-col items-center gap-3">
           <Loader className="w-8 h-8 text-ios-blue animate-spin" />
-          <p className="text-[15px] text-ios-gray">正在分析文体特征{useLlm ? '和 LLM 评分' : ''}…</p>
+          <p className="text-[15px] text-ios-gray">
+            正在分析文体特征
+            {useLlm ? '、LLM 评分' : ''}
+            {useCurvature ? '、概率曲率（Fast-DetectGPT）' : ''}
+            …
+          </p>
         </div>
       )}
 
@@ -155,7 +351,11 @@ const DetectionReport = ({ text }) => {
                 <ScoreRing score={report.document_score} tier={report.document_tier} />
                 <span className={`text-[15px] font-bold ${colors.text}`}>{report.document_tier_cn}</span>
                 <span className="text-[12px] text-ios-gray">
-                  置信度：{report.confidence === 'high' ? '高' : report.confidence === 'medium' ? '中' : '低'}
+                  置信度：{
+                    report.confidence === 'very_high' ? '非常高' :
+                    report.confidence === 'high' ? '高' :
+                    report.confidence === 'medium' ? '中' : '低'
+                  }
                 </span>
               </div>
 
@@ -212,6 +412,45 @@ const DetectionReport = ({ text }) => {
                 <div className="text-[12px] text-ios-gray bg-white/60 rounded-lg px-3 py-2 self-start">
                   LLM 评分不可用（未配置 API 或已禁用）<br />
                   当前结果仅基于文体特征
+                </div>
+              )}
+
+              {/* 概率曲率结果（Fast-DetectGPT Layer 3） */}
+              {report.curvature?.available && (
+                <div className="flex-1 min-w-[200px]">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Zap className="w-4 h-4 text-purple-500" />
+                    <span className="text-[13px] font-semibold text-purple-600">概率曲率检测</span>
+                    <span className="text-[11px] text-ios-gray ml-1">Fast-DetectGPT</span>
+                  </div>
+                  <div className="space-y-1.5 text-[13px]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-ios-gray">AI 风险概率</span>
+                      <span className={`font-bold ${
+                        report.curvature.ai_risk_percent >= 65 ? 'text-red-600' :
+                        report.curvature.ai_risk_percent >= 40 ? 'text-orange-600' : 'text-green-600'
+                      }`}>{report.curvature.ai_risk_percent}%</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-1.5 rounded-full transition-all duration-700 ${
+                          report.curvature.ai_risk_percent >= 65 ? 'bg-red-500' :
+                          report.curvature.ai_risk_percent >= 40 ? 'bg-orange-400' : 'bg-green-500'
+                        }`}
+                        style={{ width: `${report.curvature.ai_risk_percent}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[11px] text-ios-gray/70">
+                      <span>归一化曲率：{report.curvature.normalized_curvature?.toFixed(3)}</span>
+                      <span>token 数：{report.curvature.token_count}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {report.curvature && !report.curvature.available && (
+                <div className="text-[12px] text-ios-gray bg-white/60 rounded-lg px-3 py-2 self-start">
+                  概率曲率不可用<br />
+                  <span className="text-[11px]">{report.curvature.error || 'API 不支持 logprobs'}</span>
                 </div>
               )}
             </div>

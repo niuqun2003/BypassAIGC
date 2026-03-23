@@ -69,6 +69,7 @@ class SessionResponse(BaseModel):
     current_position: int
     total_segments: int
     original_char_count: int = 0
+    text_preview: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -201,6 +202,7 @@ class DetectionRequest(BaseModel):
     """AIGC 检测请求"""
     text: str = Field(..., min_length=10, max_length=100000)
     use_llm: bool = True
+    use_curvature: bool = True
     detect_model: Optional[str] = None
     detect_api_key: Optional[str] = None
     detect_base_url: Optional[str] = None

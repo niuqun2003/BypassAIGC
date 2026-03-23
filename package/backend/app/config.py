@@ -5,12 +5,20 @@ import sys
 
 
 def get_exe_dir():
-    """获取 exe 所在目录，用于定位 .env 和数据库文件"""
+    """获取应用根目录，用于定位 .env 和数据库文件。
+
+    优先读取 APP_BASE_DIR 环境变量（由 package/main.py 在启动时注入），
+    这样无论 config.py 位于哪一层目录，始终指向同一个路径，
+    彻底消除多 .env 文件问题。
+    """
+    if os.environ.get('APP_BASE_DIR'):
+        return os.environ['APP_BASE_DIR']
     if getattr(sys, 'frozen', False):
         # 运行在 PyInstaller 打包的 exe 中
         return os.path.dirname(sys.executable)
     else:
-        # 正常 Python 运行
+        # 独立运行 backend（不通过 package/main.py）时的回退：
+        # config.py 在 backend/app/ 下，上移两级到 backend/
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -62,6 +70,14 @@ class Settings(BaseSettings):
     EMOTION_MODEL: Optional[str] = None
     EMOTION_API_KEY: Optional[str] = None
     EMOTION_BASE_URL: Optional[str] = None
+
+    # Layer 3 Fast-DetectGPT 概率曲率检测配置
+    # 不填则逐级回退到 DETECT_* → POLISH_* 配置
+    CURVATURE_MODEL: Optional[str] = None
+    CURVATURE_API_KEY: Optional[str] = None
+    CURVATURE_BASE_URL: Optional[str] = None
+    CURVATURE_ENABLED: bool = True       # 全局开关
+    CURVATURE_MAX_CHARS: int = 2000      # 送检最大字符数（控制 API 成本）
 
     # AIGC 检测模型配置（不填则复用 POLISH_* 配置）
     DETECT_MODEL: Optional[str] = None

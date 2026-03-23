@@ -12,6 +12,7 @@ from typing import List, Dict, Optional, Tuple
 
 from openai import AsyncOpenAI
 from app.config import settings
+from app.services.curvature_service import curvature_score
 
 
 # ─────────────────────────────────────────────────────────
@@ -156,6 +157,7 @@ _SIGNAL_LABELS: Dict[str, str] = {
     "type_token_ratio":    "词汇多样性偏低",
     "sentence_uniformity": "句式单一化模板",
     "para_length_var":     "段落长度过于均匀",
+    "semantic_cluster":    "相邻句语义相似度过于均匀",
 }
 
 
@@ -305,19 +307,60 @@ def _paragraph_length_variance(paragraphs: List[str]) -> Tuple[float, float]:
     return round(cv, 3), round(risk, 3)
 
 
-# 权重（文体特征内部）
+def _char_bigrams(text: str) -> set:
+    """提取字符二元组集合，用于相似度计算"""
+    return set(text[i:i + 2] for i in range(len(text) - 1))
+
+
+def _jaccard_similarity(a: set, b: set) -> float:
+    """两个集合的 Jaccard 相似度"""
+    if not a and not b:
+        return 1.0
+    union = len(a | b)
+    return len(a & b) / union if union > 0 else 0.0
+
+
+def _semantic_clustering(sentences: List[str]) -> Tuple[float, float]:
+    """
+    语义聚类一致性：相邻句子字符二元组 Jaccard 相似度的变异系数。
+    AI 文本相邻句相似度过于均匀（低变异系数）；人类写作有自然起伏。
+    返回 (cv_raw, ai_risk_score 0-1)
+    """
+    if len(sentences) < 4:
+        return 0.5, 0.3
+    bigram_sets = [_char_bigrams(s) for s in sentences]
+    similarities = [
+        _jaccard_similarity(bigram_sets[i], bigram_sets[i + 1])
+        for i in range(len(bigram_sets) - 1)
+    ]
+    if not similarities:
+        return 0.5, 0.3
+    mean_sim = sum(similarities) / len(similarities)
+    if mean_sim < 0.001:
+        return 0.5, 0.3
+    variance = sum((s - mean_sim) ** 2 for s in similarities) / len(similarities)
+    std_sim = math.sqrt(variance)
+    cv = std_sim / mean_sim  # 变异系数：越低说明相似度越均匀 → AI 特征
+    # AI 文本 cv < 0.3；人类文本 cv > 0.5
+    risk = max(0.0, min(1.0, 1.0 - cv / 0.6))
+    return round(cv, 3), round(risk, 3)
+
+
+# 权重（文体特征内部，合计=1.0）
 _STYLO_WEIGHTS = {
-    'burstiness': 0.30,
-    'ttr': 0.20,
-    'connector': 0.25,
-    'uniformity': 0.15,
-    'para_var': 0.10,
+    'burstiness':         0.25,
+    'ttr':                0.17,
+    'connector':          0.21,
+    'uniformity':         0.13,
+    'para_var':           0.09,
+    'semantic_cluster':   0.15,
 }
 
 
 def analyze_stylometric(text: str) -> Dict:
     """
     计算全部文体特征，返回特征值和整体 ai_score (0-1)。
+    包含6维特征：突发度、词汇多样性、连接词密度、句式单一性、段落长度方差、语义聚类一致性。
     """
     sentences = split_sentences(text)
     paragraphs = split_paragraphs(text)
@@ -328,23 +371,26 @@ def analyze_stylometric(text: str) -> Dict:
     conn_raw, conn_risk = _connector_density(text)
     unif_raw, unif_risk = _sentence_uniformity(sentences)
     pvar_raw, pvar_risk = _paragraph_length_variance(paragraphs)
+    sclus_raw, sclus_risk = _semantic_clustering(sentences)
 
     score = (
         bursty_risk * _STYLO_WEIGHTS['burstiness'] +
         ttr_risk    * _STYLO_WEIGHTS['ttr'] +
         conn_risk   * _STYLO_WEIGHTS['connector'] +
         unif_risk   * _STYLO_WEIGHTS['uniformity'] +
-        pvar_risk   * _STYLO_WEIGHTS['para_var']
+        pvar_risk   * _STYLO_WEIGHTS['para_var'] +
+        sclus_risk  * _STYLO_WEIGHTS['semantic_cluster']
     )
 
     return {
         'ai_score': round(score, 3),
         'features': {
-            'burstiness':          {'value': bursty_raw, 'risk': bursty_risk, 'label': '突发度（低=AI）'},
-            'type_token_ratio':    {'value': ttr_raw,   'risk': ttr_risk,    'label': '词汇多样性（低=AI）'},
-            'connector_density':   {'value': conn_raw,  'risk': conn_risk,   'label': '连接词密度（高=AI）'},
-            'sentence_uniformity': {'value': unif_raw,  'risk': unif_risk,   'label': '句式单一性（高=AI）'},
-            'para_length_var':     {'value': pvar_raw,  'risk': pvar_risk,   'label': '段落长度方差（低=AI）'},
+            'burstiness':          {'value': bursty_raw,  'risk': bursty_risk,  'label': '突发度（低=AI）'},
+            'type_token_ratio':    {'value': ttr_raw,     'risk': ttr_risk,     'label': '词汇多样性（低=AI）'},
+            'connector_density':   {'value': conn_raw,    'risk': conn_risk,    'label': '连接词密度（高=AI）'},
+            'sentence_uniformity': {'value': unif_raw,    'risk': unif_risk,    'label': '句式单一性（高=AI）'},
+            'para_length_var':     {'value': pvar_raw,    'risk': pvar_risk,    'label': '段落长度方差（低=AI）'},
+            'semantic_cluster':    {'value': sclus_raw,   'risk': sclus_risk,   'label': '语义聚类一致性（低变异=AI）'},
         },
         'stats': {
             'sentence_count': len(sentences),
@@ -459,21 +505,43 @@ async def llm_score(
 # 综合打分
 # ─────────────────────────────────────────────────────────
 
-def _final_score(stylo_score: float, llm_prob: Optional[int]) -> Tuple[int, str]:
+def _final_score(
+    stylo_score: float,
+    llm_prob: Optional[int],
+    curvature_percent: Optional[int],
+) -> Tuple[int, str]:
     """
-    合并文体分和 LLM 分 → 最终文档分 (0-100) + 置信度标签。
-    - 只有文体分时：权重 100%，置信度降级
-    - 两者都有时：文体 35% + LLM 65%
-    """
-    if llm_prob is None:
-        final = int(stylo_score * 100)
-        confidence = 'medium'
-    else:
-        final = int(stylo_score * 100 * 0.35 + llm_prob * 0.65)
-        confidence = 'high'
+    三层加权融合 → 最终文档分 (0-100) + 置信度标签。
 
-    final = max(0, min(100, final))
-    return final, confidence
+    权重方案：
+      L1+L2+L3 全有   : 20% + 40% + 40%  → confidence='very_high'
+      L1+L2（无曲率）  : 35% + 65%        → confidence='high'
+      L1+L3（无LLM）  : 30% + 70%        → confidence='high'
+      仅 L1           : 100%             → confidence='medium'
+    """
+    has_llm  = llm_prob is not None
+    has_curv = curvature_percent is not None
+
+    if has_llm and has_curv:
+        scores  = [int(stylo_score * 100), llm_prob, curvature_percent]
+        weights = [20, 40, 40]
+        confidence = 'very_high'
+    elif has_llm:
+        scores  = [int(stylo_score * 100), llm_prob]
+        weights = [35, 65]
+        confidence = 'high'
+    elif has_curv:
+        scores  = [int(stylo_score * 100), curvature_percent]
+        weights = [30, 70]
+        confidence = 'high'
+    else:
+        scores  = [int(stylo_score * 100)]
+        weights = [100]
+        confidence = 'medium'
+
+    total_w = sum(weights)
+    final = int(sum(s * w for s, w in zip(scores, weights)) / total_w)
+    return max(0, min(100, final)), confidence
 
 
 def _tier_cn(tier: str) -> str:
@@ -491,6 +559,7 @@ def _tier_cn(tier: str) -> str:
 async def detect_text(
     text: str,
     use_llm: bool = True,
+    use_curvature: bool = True,
     detect_model: Optional[str] = None,
     detect_api_key: Optional[str] = None,
     detect_base_url: Optional[str] = None,
@@ -518,25 +587,48 @@ async def detect_text(
     raw_sections = split_document_sections(text)
     scored_sections = [_score_section(s) for s in raw_sections]
 
-    # — Layer 2：LLM（可选）—
+    # — Layer 2 & 3：LLM 判分 + 概率曲率（并行执行）—
     llm_result: Dict = {
-        'available': False,
-        'aigc_probability': None,
-        'confidence': 'unavailable',
-        'signals': [],
+        'available': False, 'aigc_probability': None,
+        'confidence': 'unavailable', 'signals': [],
+    }
+    curv_result: Dict = {
+        'available': False, 'method': 'fast-detectgpt-logprobs',
+        'ai_risk_percent': None, 'error': '未启用',
     }
     model_name: Optional[str] = None
-    if use_llm:
-        model_name = detect_model or settings.DETECT_MODEL or settings.POLISH_MODEL
-        api_key    = detect_api_key  or settings.DETECT_API_KEY  or settings.POLISH_API_KEY
-        base_url   = detect_base_url or settings.DETECT_BASE_URL or settings.POLISH_BASE_URL
-        if api_key and base_url and model_name:
-            llm_result = await llm_score(text, model_name, api_key, base_url)
 
-    # — 综合打分 —
+    # 解析 Layer 2 配置
+    llm_model   = detect_model   or settings.DETECT_MODEL   or settings.POLISH_MODEL
+    llm_key     = detect_api_key or settings.DETECT_API_KEY or settings.POLISH_API_KEY
+    llm_url     = detect_base_url or settings.DETECT_BASE_URL or settings.POLISH_BASE_URL
+
+    # 解析 Layer 3 配置（逐级回退到 DETECT_* → POLISH_*）
+    curv_model  = settings.CURVATURE_MODEL   or llm_model
+    curv_key    = settings.CURVATURE_API_KEY or llm_key
+    curv_url    = settings.CURVATURE_BASE_URL or llm_url
+
+    async def _run_llm():
+        nonlocal llm_result, model_name
+        if use_llm and llm_key and llm_url and llm_model:
+            model_name = llm_model
+            llm_result = await llm_score(text, llm_model, llm_key, llm_url)
+
+    async def _run_curvature():
+        nonlocal curv_result
+        if use_curvature and settings.CURVATURE_ENABLED:
+            curv_result = await curvature_score(
+                text, curv_model, curv_key, curv_url,
+                max_chars=settings.CURVATURE_MAX_CHARS,
+            )
+
+    await asyncio.gather(_run_llm(), _run_curvature())
+
+    # — 三层综合打分 —
     doc_score, confidence = _final_score(
         stylo['ai_score'],
         llm_result.get('aigc_probability') if llm_result['available'] else None,
+        curv_result.get('ai_risk_percent') if curv_result['available'] else None,
     )
     doc_tier = score_to_tier(doc_score)
 
@@ -603,12 +695,14 @@ async def detect_text(
         "fragments":         fragments,
         "explanations":      explanations,
         "report_metadata": {
-            "char_count":         len(text),
-            "flagged_char_count": flagged_chars,
-            "processing_time_ms": elapsed_ms,
-            "llm_used":           llm_result["available"],
-            "llm_available":      bool(use_llm and model_name),
-            "model_name":         model_name,
+            "char_count":           len(text),
+            "flagged_char_count":   flagged_chars,
+            "processing_time_ms":   elapsed_ms,
+            "llm_used":             llm_result["available"],
+            "llm_available":        bool(use_llm and model_name),
+            "model_name":           model_name,
+            "curvature_used":       curv_result["available"],
+            "curvature_available":  bool(use_curvature and settings.CURVATURE_ENABLED),
         },
         # 保留文体详情供前端特征条显示
         "stylometric": {
@@ -621,6 +715,17 @@ async def detect_text(
             "aigc_probability": llm_result.get("aigc_probability"),
             "confidence":       llm_result.get("confidence"),
             "signals":          llm_result.get("signals", []),
+        },
+        # Layer 3：Fast-DetectGPT 概率曲率
+        "curvature": {
+            "available":             curv_result["available"],
+            "ai_risk_percent":       curv_result.get("ai_risk_percent"),
+            "normalized_curvature":  curv_result.get("normalized_curvature"),
+            "mean_curvature":        curv_result.get("mean_curvature"),
+            "std_curvature":         curv_result.get("std_curvature"),
+            "token_count":           curv_result.get("token_count"),
+            "method":                curv_result.get("method", "fast-detectgpt-logprobs"),
+            "error":                 curv_result.get("error"),
         },
         "risk_legend": {
             "significant": {"label": "显著疑似", "threshold": DEFAULT_HIGH_THRESHOLD,   "color": "red"},

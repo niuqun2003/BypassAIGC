@@ -44,6 +44,7 @@ async def analyze_aigc(
     result = await detect_text(
         text=data.text,
         use_llm=data.use_llm,
+        use_curvature=data.use_curvature,
         detect_model=data.detect_model,
         detect_api_key=data.detect_api_key,
         detect_base_url=data.detect_base_url,
