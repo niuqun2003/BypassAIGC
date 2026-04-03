@@ -196,6 +196,30 @@ class SegmentEdit(BaseModel):
     edited_text: str = Field(..., min_length=1)
 
 
+# ── Sync Optimization ─────────────────────────────────────────────────────
+
+class SyncOptimizationCreate(BaseModel):
+    """同步改写请求"""
+    original_text: str = Field(..., min_length=1, max_length=200000)
+    processing_mode: str = Field(
+        default="paper_polish_enhance",
+        description="处理模式: paper_polish, paper_polish_enhance, emotion_polish",
+    )
+    timeout: int = Field(default=300, ge=10, le=1800, description="超时秒数，默认300s，最长1800s")
+    polish_config: Optional[ModelConfig] = None
+    enhance_config: Optional[ModelConfig] = None
+    emotion_config: Optional[ModelConfig] = None
+
+
+class SyncOptimizationResponse(BaseModel):
+    """同步改写响应"""
+    session_id: str
+    text: str = Field(description="改写后的完整文本")
+    processing_mode: str
+    total_segments: int
+    processing_time_ms: int
+
+
 # ── Detection Report Contract ──────────────────────────────────────────────
 
 class DetectionRequest(BaseModel):

@@ -2,13 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session, defer
 from sqlalchemy import func, and_, case
 from typing import List
+import asyncio
 import json
+import time
 from app.database import get_db
 from app.models.models import User, OptimizationSession, OptimizationSegment, ChangeLog
 from app.schemas import (
     OptimizationCreate, SessionResponse, SessionDetailResponse,
     QueueStatusResponse, ProgressUpdate, ChangeLogResponse, ExportConfirmation,
-    SessionFeedback, SegmentEdit
+    SessionFeedback, SegmentEdit,
+    SyncOptimizationCreate, SyncOptimizationResponse,
 )
 from app.services.optimization_service import OptimizationService
 from app.services.concurrency import concurrency_manager
@@ -560,3 +563,97 @@ async def stop_session(
     db.commit()
 
     return {"message": "会话已停止"}
+
+
+@router.post("/sync", response_model=SyncOptimizationResponse)
+async def sync_optimization(
+    card_key: str,
+    data: SyncOptimizationCreate,
+    db: Session = Depends(get_db),
+):
+    """
+    同步改写接口 — 提交后阻塞等待，完成即返回改写文本。
+
+    - 适合 Codex / 自动化脚本直接调用，无需轮询
+    - 超时由 `timeout` 参数控制（默认 300s，最长 1800s）
+    - 超出并发限制时会在服务端排队，计入超时时间内
+    - 与异步接口共享并发槽和卡密鉴权逻辑
+    """
+    user = get_current_user(card_key, db)
+
+    usage_limit = user.usage_limit if user.usage_limit is not None else settings.DEFAULT_USAGE_LIMIT
+    usage_count = user.usage_count or 0
+    if usage_limit > 0 and usage_count >= usage_limit:
+        raise HTTPException(status_code=403, detail="该卡密已达到使用次数限制")
+
+    valid_modes = ["paper_polish", "paper_polish_enhance", "emotion_polish"]
+    if data.processing_mode not in valid_modes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的处理模式。支持的模式: {', '.join(valid_modes)}",
+        )
+
+    initial_stage = "emotion_polish" if data.processing_mode == "emotion_polish" else "polish"
+
+    session_id = generate_session_id()
+    session = OptimizationSession(
+        user_id=user.id,
+        session_id=session_id,
+        original_text=data.original_text,
+        processing_mode=data.processing_mode,
+        current_stage=initial_stage,
+        status="queued",
+        progress=0.0,
+        polish_model=data.polish_config.model if data.polish_config else None,
+        polish_api_key=data.polish_config.api_key if data.polish_config else None,
+        polish_base_url=data.polish_config.base_url if data.polish_config else None,
+        enhance_model=data.enhance_config.model if data.enhance_config else None,
+        enhance_api_key=data.enhance_config.api_key if data.enhance_config else None,
+        enhance_base_url=data.enhance_config.base_url if data.enhance_config else None,
+        emotion_model=data.emotion_config.model if data.emotion_config else None,
+        emotion_api_key=data.emotion_config.api_key if data.emotion_config else None,
+        emotion_base_url=data.emotion_config.base_url if data.emotion_config else None,
+    )
+    db.add(session)
+    user.usage_count = usage_count + 1
+    db.commit()
+    db.refresh(session)
+
+    service = OptimizationService(db, session)
+    t0 = time.monotonic()
+
+    try:
+        await asyncio.wait_for(service.start_optimization(), timeout=data.timeout)
+    except asyncio.TimeoutError:
+        session.status = "failed"
+        session.error_message = f"同步接口超时（{data.timeout}s）"
+        db.commit()
+        raise HTTPException(
+            status_code=504,
+            detail=f"处理超时（{data.timeout}s），session_id={session_id} 已保存，可通过异步接口查询或重试",
+        )
+    except Exception as e:
+        # start_optimization 内部已写 failed 状态，直接透传
+        raise HTTPException(status_code=500, detail=str(e))
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+    # 拼接最终文本
+    segments = (
+        db.query(OptimizationSegment)
+        .filter(OptimizationSegment.session_id == session.id)
+        .order_by(OptimizationSegment.segment_index)
+        .all()
+    )
+    final_text = "\n\n".join(
+        seg.user_edited_text or seg.enhanced_text or seg.polished_text or seg.original_text or ""
+        for seg in segments
+    )
+
+    return SyncOptimizationResponse(
+        session_id=session_id,
+        text=final_text,
+        processing_mode=data.processing_mode,
+        total_segments=len(segments),
+        processing_time_ms=elapsed_ms,
+    )

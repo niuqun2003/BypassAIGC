@@ -261,7 +261,16 @@ class OptimizationService:
                 self.db.commit()
                 
                 # 准备输入文本
-                input_text = segment.polished_text if stage == "enhance" else segment.original_text
+                if stage == "enhance":
+                    # 若 polish 阶段将中文翻译成了英文，回退到原始中文
+                    polished = segment.polished_text or ""
+                    polished_is_chinese = (
+                        len(polished) > 0 and
+                        count_chinese_characters(polished) > len(polished) * 0.1
+                    )
+                    input_text = polished if polished_is_chinese else segment.original_text
+                else:
+                    input_text = segment.original_text
                 
                 # 调用AI
                 async def execute_call():
